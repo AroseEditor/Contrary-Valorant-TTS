@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Contrary Valorant TTS - Audio Setup (Robust Helper Search)
+    Contrary Valorant TTS - Audio Setup (Hinglish Force Mode)
 #>
 
 # --- Self-elevate -----------------------------------------------------------
@@ -28,52 +28,41 @@ Write-Step "Locating Contrary TTS executable..."
 $possiblePaths = @(
     (Get-Process "ContraryValorantTTS" -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Path),
     (Join-Path $PSScriptRoot "ContraryValorantTTS.exe"),
-    (Join-Path $PSScriptRoot "Release\ContraryValorantTTS.exe"),
-    (Join-Path $PSScriptRoot "x64\Release\ContraryValorantTTS.exe"),
     (Join-Path $env:LOCALAPPDATA "ContraryValorantTTS\ContraryValorantTTS.exe")
 )
-
 $exe = $null
-foreach ($p in $possiblePaths) {
-    if ($p -and (Test-Path $p)) { $exe = $p; break }
-}
+foreach ($p in $possiblePaths) { if ($p -and (Test-Path $p)) { $exe = $p; break } }
 
 if ($exe) {
-    Write-OK "Found: $exe"
-} else {
-    Write-Warn "ContraryTTS.exe not found. Ensure you have built the project."
-}
-
-# --- Step 2: Native Rename --------------------------------------------------
-Write-Step "Renaming devices via Native Helper..."
-if ($exe) {
+    Write-Step "Renaming devices via Native Helper..."
     Start-Process -FilePath $exe -ArgumentList "--setup-audio" -Wait -NoNewWindow
-    Write-OK "Native setup command completed."
-} else {
-    Write-Warn "Skipping native rename (executable missing)."
+    Write-OK "Native setup completed."
 }
 
-# --- Step 3: Voice Packs ----------------------------------------------------
-Write-Step "Checking Speech & Hinglish Voice Packs..."
-$voices = @("Language.Speech.en-IN", "Language.Speech.hi-IN", "Language.TextToSpeech.en-IN")
-foreach ($v in $voices) {
-    # Match specific capability name without wildcard confusion
-    $cap = Get-WindowsCapability -Online | Where-Object { $_.Name -like "$v*" } | Select-Object -First 1
-    if ($null -eq $cap) {
-        Write-Warn "Capability $v not found in Windows Update."
-        continue
-    }
-    
-    if ($cap.State -eq "Installed") {
-        Write-OK "$v already present."
-    } else {
-        Write-Step "Installing $($cap.Name) (this may take a minute)..."
-        try {
-            Add-WindowsCapability -Online -Name $cap.Name -ErrorAction Stop > $null
-            Write-OK "Successfully installed."
-        } catch {
-            Write-Warn "Failed to install $v. Please check internet connection."
+# --- Step 2: Hinglish Force -------------------------------------------------
+Write-Step "Forcing Hinglish Voice Packs..."
+
+# 1. Diagnostic: Find anything India related
+$allCaps = Get-WindowsCapability -Online
+$indiaCaps = $allCaps | Where-Object { $_.Name -like "*en-IN*" -or $_.Name -like "*hi-IN*" }
+
+if ($indiaCaps) {
+    foreach ($cap in $indiaCaps) {
+        if ($cap.State -eq "Installed") {
+            Write-OK "Already Installed: $($cap.Name)"
+        } else {
+            Write-Step "Installing $($cap.Name)..."
+            Add-WindowsCapability -Online -Name $cap.Name > $null
+            Write-OK "Done."
         }
+    }
+} else {
+    Write-Warn "No India-specific capabilities found. Attempting direct DISM injection..."
+    # Fallback to direct DISM names (standard on Win 10/11)
+    $manual = @("Language.Speech.en-IN~~~~0.0.1.0", "Language.Speech.hi-IN~~~~0.0.1.0", "Language.TextToSpeech.en-IN~~~~0.0.1.0")
+    foreach ($m in $manual) {
+        Write-Step "Trying $m..."
+        dism.exe /online /add-capability /capabilityname:$m /quiet /norestart
     }
 }
 
