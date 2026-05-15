@@ -68,7 +68,7 @@ Section "Install" SecMain
 
     ; Run audio setup (non-blocking via ExecWait, show progress)
     DetailPrint "Setting up Contrary TTS microphone..."
-    ExecWait 'powershell.exe -ExecutionPolicy Bypass -NonInteractive -File "$INSTDIR\setup_audio.ps1"' $0
+    ExecWait 'powershell.exe -STA -ExecutionPolicy Bypass -NonInteractive -File "$INSTDIR\setup_audio.ps1"' $0
     ${If} $0 != 0
         MessageBox MB_ICONEXCLAMATION|MB_OK \
             "Audio setup failed (exit code $0).$\nPlease run setup_audio.ps1 manually from:$\n$INSTDIR"

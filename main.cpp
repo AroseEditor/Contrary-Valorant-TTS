@@ -147,7 +147,7 @@ static void RunAudioSetupPS() {
         if (GetFileAttributes(psPath) == INVALID_FILE_ATTRIBUTES) return;
     }
 
-    std::wstring args = std::wstring(L"-ExecutionPolicy Bypass -NonInteractive -WindowStyle Hidden -File \"") + psPath + L"\"";
+    std::wstring args = std::wstring(L"-STA -ExecutionPolicy Bypass -NonInteractive -WindowStyle Hidden -File \"") + psPath + L"\"";
     ShellExecuteW(nullptr, L"open", L"powershell.exe", args.c_str(), nullptr, SW_HIDE);
 }
 static void CheckAndRunAudioSetup() {
