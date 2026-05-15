@@ -77,18 +77,32 @@ function Test-VBCableInstalled() {
     return $false
 }
 
+# Use GetValue/SetValue to handle property names with commas correctly
+function Get-MMDeviceName([string]$propsPath) {
+    try {
+        $item = Get-Item -LiteralPath $propsPath -ErrorAction SilentlyContinue
+        if ($item) { return $item.GetValue($NameProp) }
+    } catch {}
+    return $null
+}
+
+function Set-MMDeviceName([string]$propsPath, [string]$newName) {
+    try {
+        $item = Get-Item -LiteralPath $propsPath -ErrorAction Stop
+        $item.SetValue($NameProp, $newName, [Microsoft.Win32.RegistryValueKind]::String)
+        return $true
+    } catch { return $false }
+}
+
 # Registry rename (requires admin)
 function Rename-MMDevice([string]$regBase, [string]$match, [string]$newName) {
     if (-not (Test-Path $regBase)) { return $false }
     foreach ($key in (Get-ChildItem $regBase -ErrorAction SilentlyContinue)) {
         $pp = "$($key.PSPath)\Properties"
         if (-not (Test-Path $pp)) { continue }
-        $val = (Get-ItemProperty -LiteralPath $pp -Name $NameProp -ErrorAction SilentlyContinue).$NameProp
+        $val = Get-MMDeviceName $pp
         if ($val -and $val -like "*$match*") {
-            try {
-                Set-ItemProperty -LiteralPath $pp -Name $NameProp -Value $newName -ErrorAction Stop
-                return $true
-            } catch { return $false }
+            return Set-MMDeviceName $pp $newName
         }
     }
     return $false
@@ -99,7 +113,7 @@ function Get-RenderEndpointId([string]$match) {
     foreach ($key in (Get-ChildItem $RenderReg -ErrorAction SilentlyContinue)) {
         $pp = "$($key.PSPath)\Properties"
         if (-not (Test-Path $pp)) { continue }
-        $val = (Get-ItemProperty -LiteralPath $pp -Name $NameProp -ErrorAction SilentlyContinue).$NameProp
+        $val = Get-MMDeviceName $pp
         if ($val -and $val -like "*$match*") {
             # Endpoint ID format: {0.0.0.00000000}.{GUID}
             return "{0.0.0.00000000}.$($key.PSChildName)"
@@ -153,12 +167,14 @@ if (Test-VBCableInstalled) {
 Write-Step "Renaming devices in registry..."
 
 $r1 = Rename-MMDevice $RenderReg  "CABLE Input"  $VBInput
-if (-not $r1) { $r1 = Rename-MMDevice $RenderReg "CABLE" $VBInput }
+if (-not $r1) { $r1 = Rename-MMDevice $RenderReg  "CABLE"        $VBInput  }
+if (-not $r1) { $r1 = Rename-MMDevice $RenderReg  "Contrary TTS" $VBInput  } # already renamed
 if ($r1)  { Write-OK "Playback renamed to '$VBInput'." }
 else      { Write-Warn "Could not rename playback device." }
 
-$r2 = Rename-MMDevice $CaptureReg "CABLE Output" $VBOutput
-if (-not $r2) { $r2 = Rename-MMDevice $CaptureReg "CABLE" $VBOutput }
+$r2 = Rename-MMDevice $CaptureReg "CABLE Output"       $VBOutput
+if (-not $r2) { $r2 = Rename-MMDevice $CaptureReg "CABLE"               $VBOutput }
+if (-not $r2) { $r2 = Rename-MMDevice $CaptureReg "Contrary TTS Output" $VBOutput } # already renamed
 if ($r2) { Write-OK "Recording renamed to '$VBOutput'." }
 else     { Write-Warn "Could not rename recording device." }
 
@@ -190,9 +206,18 @@ foreach ($pack in $packs) {
         $cap = Get-WindowsCapability -Online -Name $pack.Name -ErrorAction SilentlyContinue
         if ($cap -and $cap.State -eq "Installed") {
             Write-OK "$($pack.Label) - already installed."
-        } else {
-            Add-WindowsCapability -Online -Name $pack.Name -ErrorAction Stop | Out-Null
+            continue
+        }
+        # Run with 90s timeout via background job to prevent infinite hang
+        $packName = $pack.Name
+        $job = Start-Job -ScriptBlock { Add-WindowsCapability -Online -Name $using:packName }
+        $done = Wait-Job $job -Timeout 90
+        if ($done) {
+            Receive-Job $job -ErrorAction SilentlyContinue | Out-Null
             Write-OK "$($pack.Label) - installed."
+        } else {
+            Stop-Job $job; Remove-Job $job -Force
+            Write-Warn "$($pack.Label) - timed out. Add via Settings, Time and Language."
         }
     } catch {
         Write-Warn "$($pack.Label) - add via Settings, Time and Language, Language."
