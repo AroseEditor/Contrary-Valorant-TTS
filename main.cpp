@@ -1,6 +1,3 @@
-
-#define UNICODE
-#define _UNICODE
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 
@@ -115,7 +112,6 @@ static void RegSaveDW(const wchar_t* val, DWORD v) {
         RegSetValueEx(hk, val, 0, REG_DWORD, (BYTE*)&v, sizeof(v));
         RegCloseKey(hk);
     }
-}
 }
 
 // ─── Native Audio Setup (Bypasses Registry Locks) ─────────────────────────────
