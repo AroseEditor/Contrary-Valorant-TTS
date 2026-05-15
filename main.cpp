@@ -4,7 +4,8 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 
-#define IDI_ICON1 101
+#define IDI_ICON1        101
+#define IDR_SETUP_SCRIPT 102
 
 #include <windows.h>
 #include <windowsx.h>
@@ -114,13 +115,39 @@ static void RegSaveDW(const wchar_t* val, DWORD v) {
 
 // ─── Audio setup ──────────────────────────────────────────────────────────────
 static void RunAudioSetupPS() {
-    WCHAR ps[MAX_PATH]={};
-    GetModuleFileName(nullptr, ps, MAX_PATH);
-    WCHAR* sl=wcsrchr(ps, L'\\');
-    if (!sl) return;
-    wcscpy_s(sl+1, MAX_PATH-(int)(sl-ps)-1, L"setup_audio.ps1");
-    if (GetFileAttributes(ps)==INVALID_FILE_ATTRIBUTES) return;
-    std::wstring args = std::wstring(L"-ExecutionPolicy Bypass -NonInteractive -WindowStyle Hidden -File \"") + ps + L"\"";
+    WCHAR psPath[MAX_PATH] = {};
+    bool usingTemp = false;
+
+    // 1. Try to extract from embedded resource (single-exe mode)
+    HRSRC hRes = FindResource(nullptr, MAKEINTRESOURCE(IDR_SETUP_SCRIPT), RT_RCDATA);
+    if (hRes) {
+        HGLOBAL hGlob = LoadResource(nullptr, hRes);
+        DWORD   sz    = SizeofResource(nullptr, hRes);
+        void*   pData = LockResource(hGlob);
+        if (pData && sz > 0) {
+            GetTempPath(MAX_PATH, psPath);
+            wcscat_s(psPath, L"ContraryTTS_setup.ps1");
+            HANDLE hFile = CreateFile(psPath, GENERIC_WRITE, 0, nullptr,
+                                      CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (hFile != INVALID_HANDLE_VALUE) {
+                DWORD written;
+                WriteFile(hFile, pData, sz, &written, nullptr);
+                CloseHandle(hFile);
+                usingTemp = true;
+            }
+        }
+    }
+
+    // 2. Fallback: setup_audio.ps1 beside the exe
+    if (!usingTemp) {
+        GetModuleFileName(nullptr, psPath, MAX_PATH);
+        WCHAR* sl = wcsrchr(psPath, L'\\');
+        if (!sl) return;
+        wcscpy_s(sl+1, MAX_PATH-(int)(sl-psPath)-1, L"setup_audio.ps1");
+        if (GetFileAttributes(psPath) == INVALID_FILE_ATTRIBUTES) return;
+    }
+
+    std::wstring args = std::wstring(L"-ExecutionPolicy Bypass -NonInteractive -WindowStyle Hidden -File \"") + psPath + L"\"";
     ShellExecuteW(nullptr, L"open", L"powershell.exe", args.c_str(), nullptr, SW_HIDE);
 }
 static void CheckAndRunAudioSetup() {

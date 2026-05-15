@@ -336,4 +336,28 @@ Write-Host ""
 Write-Host "  The TTS voices will now play through your mic." -ForegroundColor Gray
 Write-Host "════════════════════════════════════════" -ForegroundColor Magenta
 
+# ─── Step 5: Install Indian English + Hindi speech voices ─────────────────────
+Write-Step "Installing speech voices (Indian English + Hindi)..."
+
+$voicePacks = @(
+    @{ Name="Language.Speech~~~en-IN~0.0.1.0"; Label="Indian English (Heera / Ravi)" },
+    @{ Name="Language.Speech~~~hi-IN~0.0.1.0"; Label="Hindi (Kalpana / Hemant)" }
+)
+
+foreach ($pack in $voicePacks) {
+    try {
+        $existing = Get-WindowsCapability -Online -Name $pack.Name -ErrorAction SilentlyContinue
+        if ($existing -and $existing.State -eq "Installed") {
+            Write-OK "$($pack.Label) — already installed."
+        } else {
+            Write-Host "  Installing $($pack.Label)..." -ForegroundColor Cyan
+            Add-WindowsCapability -Online -Name $pack.Name -ErrorAction Stop | Out-Null
+            Write-OK "$($pack.Label) — installed."
+        }
+    } catch {
+        Write-Warn "$($pack.Label) — could not install automatically. Install manually:"
+        Write-Warn "  Settings → Time & Language → Language → Add English (India) / Hindi (India)"
+    }
+}
+
 exit 0
