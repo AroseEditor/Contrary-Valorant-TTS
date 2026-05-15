@@ -28,6 +28,7 @@
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 #define WM_TRAYICON      (WM_USER + 1)
+#define WM_SHOW_BALLOON  (WM_USER + 2)  // posted from TTS thread
 #define IDM_EXIT         1001
 #define IDM_TITLE        1002
 #define IDM_HOTKEY_INFO  1003
@@ -240,6 +241,46 @@ static void SelectVoice(bool hindiNeeded) {
     if (fallback && fallback != chosen) fallback->Release();
 }
 
+// ─── Audio output device routing ─────────────────────────────────────────────
+// Finds the SAPI audio output token whose description contains 'nameSubstr'.
+// Caller must Release() the returned token.
+static ISpObjectToken* FindAudioOutputToken(const wchar_t* nameSubstr) {
+    ISpObjectTokenCategory* pCat  = nullptr;
+    IEnumSpObjectTokens*    pEnum = nullptr;
+    SpGetCategoryFromId(SPCAT_AUDIOOUT, &pCat);
+    if (!pCat) return nullptr;
+    pCat->EnumTokens(nullptr, nullptr, &pEnum);
+    pCat->Release();
+    if (!pEnum) return nullptr;
+
+    ISpObjectToken* pToken = nullptr;
+    ISpObjectToken* found  = nullptr;
+    while (pEnum->Next(1, &pToken, nullptr) == S_OK) {
+        WCHAR* desc = nullptr;
+        SpGetDescription(pToken, &desc);
+        if (desc) {
+            bool match = (wcsstr(desc, nameSubstr) != nullptr);
+            CoTaskMemFree(desc);
+            if (match) { found = pToken; break; }  // keep ref
+        }
+        pToken->Release();
+    }
+    pEnum->Release();
+    return found;
+}
+
+// Post a tray balloon from any thread (avoids calling Shell_NotifyIcon off main thread)
+static void ShowTrayBalloon(const wchar_t* title, const wchar_t* body) {
+    // Encode as two pointers in a heap-allocated pair — main thread frees them
+    // Simple approach: just post with lParam = 0, use fixed strings in WM_SHOW_BALLOON
+    // For simplicity store in globals (balloon is rare / non-concurrent)
+    static wchar_t s_title[64];
+    static wchar_t s_body[256];
+    wcscpy_s(s_title, title);
+    wcscpy_s(s_body,  body);
+    PostMessage(g_hwnd, WM_SHOW_BALLOON, (WPARAM)s_title, (LPARAM)s_body);
+}
+
 // ─── TTS Thread ──────────────────────────────────────────────────────────────
 static void TTSThread() {
     CoInitializeEx(nullptr, COINIT_MULTITHREADED);
@@ -251,6 +292,19 @@ static void TTSThread() {
     if (voice) {
         voice->SetRate(1);
         voice->SetVolume(100);
+
+        // Route output to "Contrary TTS" virtual device (set up by setup_audio.ps1)
+        ISpObjectToken* pAudioToken = FindAudioOutputToken(L"Contrary TTS");
+        if (pAudioToken) {
+            voice->SetOutput(pAudioToken, TRUE);
+            pAudioToken->Release();
+        } else {
+            // Device not ready yet — warn user via tray balloon, fall back to default
+            ShowTrayBalloon(
+                L"Contrary TTS",
+                L"Audio device not found. Run setup_audio.ps1 from the install folder.");
+        }
+
         // Initial voice selection (English)
         SelectVoice(false);
     }
@@ -476,6 +530,19 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_ACTIVATE:
         SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
         return 0;
+
+    case WM_SHOW_BALLOON: {
+        // Called from TTS thread via PostMessage — safe to call Shell_NotifyIcon here
+        const wchar_t* title = (const wchar_t*)wp;
+        const wchar_t* body  = (const wchar_t*)lp;
+        NOTIFYICONDATA nid   = g_nid;
+        nid.uFlags           = NIF_INFO;
+        nid.dwInfoFlags      = NIIF_WARNING;
+        wcscpy_s(nid.szInfoTitle, title);
+        wcscpy_s(nid.szInfo,      body);
+        Shell_NotifyIcon(NIM_MODIFY, &nid);
+        return 0;
+    }
 
     case WM_DESTROY:
         UnregisterHotKey(nullptr, HOTKEY_ID);

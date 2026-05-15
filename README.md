@@ -1,13 +1,13 @@
 <div align="center">
 
-<img src="icon_256.png" width="120" alt="Contrary Valorant TTS Logo" />
+<img src="icon_256.png" width="120" alt="Contrary Valorant TTS" />
 
 # Contrary Valorant TTS
 
 **Press F10. Type. Speak. That's it.**
 
-[![Build](https://github.com/USERNAME/Contrary-Valorant-TTS/actions/workflows/build.yml/badge.svg)](https://github.com/USERNAME/Contrary-Valorant-TTS/actions/workflows/build.yml)
-[![Release](https://img.shields.io/github/v/release/USERNAME/Contrary-Valorant-TTS)](https://github.com/USERNAME/Contrary-Valorant-TTS/releases/latest)
+[![Build](https://github.com/AroseEditor/Contrary-Valorant-TTS/actions/workflows/build.yml/badge.svg)](https://github.com/AroseEditor/Contrary-Valorant-TTS/actions/workflows/build.yml)
+[![Release](https://img.shields.io/github/v/release/AroseEditor/Contrary-Valorant-TTS)](https://github.com/AroseEditor/Contrary-Valorant-TTS/releases/latest)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-0078d4)
 
@@ -20,6 +20,7 @@
 - [What is this?](#what-is-this)
 - [Download & Install](#download--install)
 - [Features](#features)
+- [How the mic works](#how-the-mic-works)
 - [Build from Source](#build-from-source)
 - [Voices & Hinglish](#voices--hinglish)
 - [License](#license)
@@ -48,7 +49,7 @@ It works with any fullscreen app, not just Valorant.
 
 > **Note:** Valorant must be in **Borderless Window** mode for the overlay to appear on top of the game.
 
-> **Mic routing:** To speak through your mic in-game, install [VB-Cable](https://vb-audio.com/Cable/) (free) and set it as your default playback device. Valorant mic input = VB-Cable Output.
+> **Mic routing:** The installer automatically sets up a virtual mic called **Contrary TTS**. In Valorant (Settings → Audio → Input Device), select **Contrary TTS** — your teammates will hear the AI voice. See [How the mic works](#how-the-mic-works) below.
 
 ---
 
@@ -61,6 +62,34 @@ It works with any fullscreen app, not just Valorant.
 - **Semi-transparent overlay** — doesn't block your screen, fades in/out smoothly
 - **System tray icon** — runs silently in the background, no taskbar clutter
 - **No internet required** — fully offline, uses Windows built-in voices
+
+---
+
+## 🎙️ How the mic works
+
+When you install Contrary Valorant TTS, it automatically:
+
+1. Installs a virtual audio device called **Contrary TTS** on your PC
+2. Sets it as your default Windows playback device
+3. Routes the TTS voice output through it
+4. In Valorant (or any game), set your mic input to **Contrary TTS** — your teammates will hear the AI voice instead of your real mic
+
+**You don't need to configure anything manually.** The installer handles it.
+
+### If something goes wrong
+
+- Open your install folder and run `setup_audio.ps1` manually
+- In PowerShell: `powershell -ExecutionPolicy Bypass -File setup_audio.ps1`
+- Check Windows Sound Settings → Playback tab → **Contrary TTS** should be listed there
+- In Valorant: Settings → Audio → Input Device → select **Contrary TTS**
+
+### How it works under the hood
+
+The installer runs `setup_audio.ps1` which:
+- **Downloads & silently installs** [VB-Cable](https://vb-audio.com/Cable/) (free virtual audio driver)
+- **Renames** the VB-Cable device to "Contrary TTS" via Windows Core Audio API (`IMMDevice` property store)
+- **Sets it as default playback** via `IPolicyConfig` (undocumented but stable COM interface, used by audio managers since Vista)
+- The TTS engine (`ISpVoice`) speaks to this device specifically — VB-Cable loops it back as a recording input, so Valorant sees it as a microphone
 
 ---
 
@@ -77,7 +106,7 @@ It works with any fullscreen app, not just Valorant.
 ### Quick Build
 
 ```bat
-git clone https://github.com/USERNAME/Contrary-Valorant-TTS
+git clone https://github.com/AroseEditor/Contrary-Valorant-TTS
 cd Contrary-Valorant-TTS
 build.bat
 ```
@@ -106,6 +135,7 @@ Contrary-Valorant-TTS/
 ├── generate_icon.py          # Pillow icon generator
 ├── app.rc                    # Windows resource file (icon embed)
 ├── installer.nsi             # NSIS installer script
+├── setup_audio.ps1           # VB-Cable install + Contrary TTS device setup
 ├── build.bat                 # Local build script (MSVC + NSIS)
 ├── .github/
 │   └── workflows/

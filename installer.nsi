@@ -61,9 +61,18 @@ Section "Install" SecMain
     ; Copy files
     File "ContraryValorantTTS.exe"
     File "icon.ico"
+    File "setup_audio.ps1"
 
     ; Write uninstaller
     WriteUninstaller "$INSTDIR\uninstall.exe"
+
+    ; Run audio setup (non-blocking via ExecWait, show progress)
+    DetailPrint "Setting up Contrary TTS microphone..."
+    ExecWait 'powershell.exe -ExecutionPolicy Bypass -NonInteractive -File "$INSTDIR\setup_audio.ps1"' $0
+    ${If} $0 != 0
+        MessageBox MB_ICONEXCLAMATION|MB_OK \
+            "Audio setup failed (exit code $0).$\nPlease run setup_audio.ps1 manually from:$\n$INSTDIR"
+    ${EndIf}
 
     ; Registry — install dir
     WriteRegStr HKCU "Software\ContraryValorantTTS" "InstallDir" "$INSTDIR"
@@ -112,6 +121,7 @@ Section "Uninstall"
 
     Delete "$INSTDIR\ContraryValorantTTS.exe"
     Delete "$INSTDIR\icon.ico"
+    Delete "$INSTDIR\setup_audio.ps1"
     Delete "$INSTDIR\uninstall.exe"
     RMDir  "$INSTDIR"
 
