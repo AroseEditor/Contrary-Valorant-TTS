@@ -57,7 +57,8 @@ if ($exe) {
 Write-Step "Checking Speech Voice Packs..."
 $voices = @("Language.Speech.en-IN", "Language.Speech.hi-IN")
 foreach ($v in $voices) {
-    $cap = Get-WindowsCapability -Online -Name "$v*" | Select-Object -First 1
+    # Match specific capability name without wildcard confusion
+    $cap = Get-WindowsCapability -Online | Where-Object { $_.Name -like "$v*" } | Select-Object -First 1
     if ($null -eq $cap) {
         Write-Warn "Capability $v not found in Windows Update."
         continue
