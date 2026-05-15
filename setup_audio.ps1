@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Contrary Valorant TTS - Audio Setup (Native Helper Mode)
+    Contrary Valorant TTS - Audio Setup (Robust Helper Search)
 #>
 
 # --- Self-elevate -----------------------------------------------------------
@@ -25,41 +25,54 @@ function Write-Warn([string]$m) { Write-Host " [!!] $m"  -ForegroundColor Yellow
 
 # --- Step 1: Detect App -----------------------------------------------------
 Write-Step "Locating Contrary TTS executable..."
-$exe = Get-Process "ContraryTTS" -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Path
-if (-not $exe) {
-    $exe = Join-Path $PSScriptRoot "ContraryTTS.exe"
-    if (-not (Test-Path $exe)) {
-        $exe = Join-Path $env:LOCALAPPDATA "ContraryValorantTTS\ContraryTTS.exe"
-    }
+$possiblePaths = @(
+    (Get-Process "ContraryTTS" -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Path),
+    (Join-Path $PSScriptRoot "ContraryTTS.exe"),
+    (Join-Path $PSScriptRoot "Release\ContraryTTS.exe"),
+    (Join-Path $PSScriptRoot "x64\Release\ContraryTTS.exe"),
+    (Join-Path $env:LOCALAPPDATA "ContraryValorantTTS\ContraryTTS.exe")
+)
+
+$exe = $null
+foreach ($p in $possiblePaths) {
+    if ($p -and (Test-Path $p)) { $exe = $p; break }
 }
 
-if (Test-Path $exe) {
+if ($exe) {
     Write-OK "Found: $exe"
 } else {
-    Write-Warn "Executable not found. Falling back to diagnostic scan..."
+    Write-Warn "ContraryTTS.exe not found. Ensure you have built the project."
 }
 
 # --- Step 2: Native Rename --------------------------------------------------
 Write-Step "Renaming devices via Native Helper..."
-if (Test-Path $exe) {
-    # Run the app with the setup flag. This uses IPropertyStore (stable) instead of Registry (locked)
+if ($exe) {
     Start-Process -FilePath $exe -ArgumentList "--setup-audio" -Wait -NoNewWindow
-    Write-OK "Native setup command sent."
+    Write-OK "Native setup command completed."
 } else {
-    Write-Warn "Cannot run native setup without the executable."
+    Write-Warn "Skipping native rename (executable missing)."
 }
 
 # --- Step 3: Voice Packs ----------------------------------------------------
 Write-Step "Checking Speech Voice Packs..."
 $voices = @("Language.Speech.en-IN", "Language.Speech.hi-IN")
 foreach ($v in $voices) {
-    $cap = Get-WindowsCapability -Online -Name "$v*"
+    $cap = Get-WindowsCapability -Online -Name "$v*" | Select-Object -First 1
+    if ($null -eq $cap) {
+        Write-Warn "Capability $v not found in Windows Update."
+        continue
+    }
+    
     if ($cap.State -eq "Installed") {
         Write-OK "$v already present."
     } else {
-        Write-Step "Installing $v (this may take a minute)..."
-        Add-WindowsCapability -Online -Name $cap.Name > $null
-        Write-OK "$v installed."
+        Write-Step "Installing $($cap.Name) (this may take a minute)..."
+        try {
+            Add-WindowsCapability -Online -Name $cap.Name -ErrorAction Stop > $null
+            Write-OK "Successfully installed."
+        } catch {
+            Write-Warn "Failed to install $v. Please check internet connection."
+        }
     }
 }
 
