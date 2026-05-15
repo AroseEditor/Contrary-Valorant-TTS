@@ -7,7 +7,7 @@
     driver install may prompt UAC).
 #>
 
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = "Continue"
 $VBName   = "Contrary TTS"
 $VBInput  = "Contrary TTS"          # playback side (TTS speaks here)
 $VBOutput = "Contrary TTS Output"   # recording side (game/Valorant picks this as mic)

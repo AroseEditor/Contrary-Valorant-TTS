@@ -9,7 +9,7 @@ Unicode true
 ; ─── General ──────────────────────────────────────────────────────────────────
 Name              "Contrary Valorant TTS"
 OutFile           "ContraryValorantTTS-Setup.exe"
-InstallDir        "$PROGRAMFILES64\ContraryValorantTTS"
+InstallDir        "$LOCALAPPDATA\ContraryValorantTTS"
 InstallDirRegKey  HKCU "Software\ContraryValorantTTS" "InstallDir"
 RequestExecutionLevel user
 SetCompressor     /SOLID lzma

@@ -151,10 +151,9 @@ static void RunAudioSetupPS() {
     ShellExecuteW(nullptr, L"open", L"powershell.exe", args.c_str(), nullptr, SW_HIDE);
 }
 static void CheckAndRunAudioSetup() {
+    // Always run in background — PS1 skips steps already done (idempotent)
     std::thread([](){
-        if (RegLoadDW(L"AudioSetupDone")==1) return;
         RunAudioSetupPS();
-        RegSaveDW(L"AudioSetupDone", 1);
     }).detach();
 }
 
@@ -547,18 +546,18 @@ static std::wstring GetVoiceCategory(const std::wstring& name) {
 static LRESULT CALLBACK SettingsWndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
     case WM_CREATE: {
-        // List box of voices
+        // List box of voices — takes up bulk of client area
         CreateWindow(L"LISTBOX", nullptr,
             WS_CHILD|WS_VISIBLE|WS_VSCROLL|LBS_NOTIFY|LBS_NOINTEGRALHEIGHT,
-            12, 50, 356, 200, hw, (HMENU)SETTINGS_LIST_ID, g_hInst, nullptr);
+            12, 58, 456, 260, hw, (HMENU)SETTINGS_LIST_ID, g_hInst, nullptr);
         // Apply button
         CreateWindow(L"BUTTON", L"Apply Voice",
-            WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON,
-            12, 262, 110, 28, hw, (HMENU)SETTINGS_APPLY_ID, g_hInst, nullptr);
+            WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON|BS_DEFPUSHBUTTON,
+            12, 330, 120, 30, hw, (HMENU)SETTINGS_APPLY_ID, g_hInst, nullptr);
         // Re-run audio setup button
         CreateWindow(L"BUTTON", L"Re-run Audio Setup",
             WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON,
-            134, 262, 140, 28, hw, (HMENU)SETTINGS_SETUP_ID, g_hInst, nullptr);
+            144, 330, 160, 30, hw, (HMENU)SETTINGS_SETUP_ID, g_hInst, nullptr);
 
         // Font for all controls
         LOGFONT lf={}; lf.lfHeight=-16; lf.lfQuality=CLEARTYPE_QUALITY;
@@ -624,12 +623,24 @@ static LRESULT CALLBACK SettingsWndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp)
     case WM_PAINT: {
         PAINTSTRUCT ps; HDC hdc=BeginPaint(hw,&ps);
         SetBkMode(hdc,TRANSPARENT);
-        SetTextColor(hdc,RGB(0xff,0xff,0xff));
-        HFONT hF=(HFONT)GetStockObject(DEFAULT_GUI_FONT);
-        SelectObject(hdc,hF);
-        TextOut(hdc,12,12,L"Voice Settings — Contrary TTS",30);
-        SetTextColor(hdc,RGB(0x99,0x99,0xbb));
-        TextOut(hdc,12,30,L"Select voice then click Apply (or double-click):",48);
+        // Title
+        LOGFONT lf={}; lf.lfHeight=-18; lf.lfWeight=FW_SEMIBOLD; lf.lfQuality=CLEARTYPE_QUALITY;
+        wcscpy_s(lf.lfFaceName, L"Segoe UI");
+        HFONT hFTitle = CreateFontIndirect(&lf);
+        HFONT hOld = (HFONT)SelectObject(hdc, hFTitle);
+        SetTextColor(hdc,RGB(0xff,0x46,0x55));
+        const wchar_t* t1=L"Contrary TTS  —  Voice Settings";
+        TextOut(hdc,12,10,t1,(int)wcslen(t1));
+        DeleteObject(SelectObject(hdc,hOld));
+        // Subtitle
+        LOGFONT lf2={}; lf2.lfHeight=-13; lf2.lfQuality=CLEARTYPE_QUALITY;
+        wcscpy_s(lf2.lfFaceName, L"Segoe UI");
+        HFONT hFSub = CreateFontIndirect(&lf2);
+        SelectObject(hdc, hFSub);
+        SetTextColor(hdc,RGB(0x88,0x88,0xaa));
+        const wchar_t* t2=L"Select a voice and click Apply (or double-click to apply instantly)";
+        TextOut(hdc,12,36,t2,(int)wcslen(t2));
+        DeleteObject(SelectObject(hdc,hOld));
         EndPaint(hw,&ps);
         return 0;
     }
@@ -663,12 +674,17 @@ static void ShowSettingsDialog() {
         wc.hCursor=LoadCursor(nullptr,IDC_ARROW);
         RegisterClassEx(&wc); reg=true;
     }
+    // Compute window size so client area is exactly 480x375
+    RECT cr = {0, 0, 480, 375};
+    AdjustWindowRectEx(&cr, WS_POPUP|WS_CAPTION|WS_SYSMENU, FALSE, WS_EX_TOPMOST|WS_EX_TOOLWINDOW);
+    int ww = cr.right - cr.left;
+    int wh = cr.bottom - cr.top;
     int sw=GetSystemMetrics(SM_CXSCREEN), sh=GetSystemMetrics(SM_CYSCREEN);
     g_settingsHwnd = CreateWindowEx(
         WS_EX_TOPMOST|WS_EX_TOOLWINDOW,
-        L"CVTTSSettings", L"Contrary TTS — Settings",
+        L"CVTTSSettings", L"Contrary TTS — Voice Settings",
         WS_POPUP|WS_CAPTION|WS_SYSMENU|WS_VISIBLE,
-        (sw-380)/2, (sh-310)/2, 380, 310,
+        (sw-ww)/2, (sh-wh)/2, ww, wh,
         g_hwnd, nullptr, g_hInst, nullptr);
 }
 
