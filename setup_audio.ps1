@@ -17,7 +17,7 @@ $CoreAudioCS = @"
 using System;
 using System.Runtime.InteropServices;
 
-[Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")]
+[Guid("A95664D2-9614-4F35-A746-DE8DB63617E6")]
 [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
 interface IMMDeviceEnumerator {
     int NotImpl1();
@@ -92,11 +92,13 @@ public static class AudioSetup {
         pid   = 14
     };
 
-    static IMMDeviceEnumerator NewEnumerator() =>
-        (IMMDeviceEnumerator)Activator.CreateInstance(Type.GetTypeFromCLSID(CLSID_MMDeviceEnumerator));
+    static IMMDeviceEnumerator NewEnumerator() {
+        return (IMMDeviceEnumerator)Activator.CreateInstance(Type.GetTypeFromCLSID(CLSID_MMDeviceEnumerator));
+    }
 
-    static IPolicyConfig NewPolicyConfig() =>
-        (IPolicyConfig)Activator.CreateInstance(Type.GetTypeFromCLSID(CLSID_PolicyConfig));
+    static IPolicyConfig NewPolicyConfig() {
+        return (IPolicyConfig)Activator.CreateInstance(Type.GetTypeFromCLSID(CLSID_PolicyConfig));
+    }
 
     public static string[] GetDeviceIds(int dataFlow) {
         var enumerator = NewEnumerator();
