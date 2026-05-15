@@ -1,0 +1,87 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags:     ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      # ── 1. Checkout ─────────────────────────────────────────────────────────
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── 2. Python + Pillow ──────────────────────────────────────────────────
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Pillow
+        run: pip install pillow
+
+      # ── 3. Generate icon ────────────────────────────────────────────────────
+      - name: Generate icon
+        run: python generate_icon.py
+
+      # ── 4. MSVC environment ─────────────────────────────────────────────────
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Setup MSVC dev cmd (x64)
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      # ── 5. Compile resource + EXE ───────────────────────────────────────────
+      - name: Compile EXE
+        run: |
+          rc.exe /nologo app.rc
+          cl.exe /O2 /W3 /EHsc /DUNICODE /D_UNICODE /DWIN32 /D_WINDOWS /nologo `
+            main.cpp app.res `
+            /Fe:ContraryValorantTTS.exe `
+            /link user32.lib gdi32.lib gdiplus.lib sapi.lib ole32.lib `
+                  shell32.lib kernel32.lib `
+            /SUBSYSTEM:WINDOWS
+
+      # ── 6. Install NSIS ─────────────────────────────────────────────────────
+      - name: Install NSIS
+        run: choco install nsis --yes --no-progress
+
+      # ── 7. Copy license for NSIS ────────────────────────────────────────────
+      - name: Prepare installer assets
+        run: Copy-Item LICENSE LICENSE_INSTALLER.txt
+
+      # ── 8. Build installer ──────────────────────────────────────────────────
+      - name: Build installer
+        run: |
+          & "C:\Program Files (x86)\NSIS\makensis.exe" installer.nsi
+
+      # ── 9. Upload artifacts ─────────────────────────────────────────────────
+      - name: Upload EXE artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ContraryValorantTTS-exe
+          path: ContraryValorantTTS.exe
+
+      - name: Upload Setup artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ContraryValorantTTS-Setup
+          path: ContraryValorantTTS-Setup.exe
+
+      # ── 10. GitHub Release (tagged pushes only) ─────────────────────────────
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ContraryValorantTTS.exe
+            ContraryValorantTTS-Setup.exe
+          generate_release_notes: true

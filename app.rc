@@ -1,0 +1,4 @@
+// app.rc — Windows resource file for Contrary Valorant TTS
+#include <windows.h>
+
+IDI_ICON1 ICON "icon.ico"
