@@ -852,16 +852,6 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         return 0;
 
-    case WM_CTLCOLOREDIT: {
-        HDC hdcEdit = (HDC)wp;
-        SetTextColor(hdcEdit, RGB(0xff, 0xff, 0xff));  // white text
-        SetBkColor(hdcEdit,   RGB(0x1a, 0x1a, 0x2e));  // match overlay bg
-        SetBkMode(hdcEdit, OPAQUE);
-        // Return a solid brush matching the bg so the edit is fully visible
-        static HBRUSH hEditBg = CreateSolidBrush(RGB(0x1a, 0x1a, 0x2e));
-        return (LRESULT)hEditBg;
-    }
-
     case WM_ACTIVATE:
         SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
         return 0;
