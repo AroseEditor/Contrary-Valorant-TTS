@@ -209,81 +209,7 @@ static Gdiplus::ARGB MakeARGB(BYTE a, BYTE r, BYTE g, BYTE b) {
 
 // ─── Draw the layered window surface ─────────────────────────────────────────
 static void DrawLayered(HWND hwnd, BYTE alpha) {
-    RECT rc;
-    GetWindowRect(hwnd, &rc);
-    int w = rc.right - rc.left;
-    int h = rc.bottom - rc.top;
-
-    HDC hdcScreen = GetDC(nullptr);
-    HDC hdcMem    = CreateCompatibleDC(hdcScreen);
-
-    BITMAPINFO bmi = {};
-    bmi.bmiHeader.biSize        = sizeof(BITMAPINFOHEADER);
-    bmi.bmiHeader.biWidth       = w;
-    bmi.bmiHeader.biHeight      = -h;
-    bmi.bmiHeader.biPlanes      = 1;
-    bmi.bmiHeader.biBitCount    = 32;
-    bmi.bmiHeader.biCompression = BI_RGB;
-
-    void* pBits = nullptr;
-    HBITMAP hBmp = CreateDIBSection(hdcMem, &bmi, DIB_RGB_COLORS, &pBits, nullptr, 0);
-    HBITMAP hOld = (HBITMAP)SelectObject(hdcMem, hBmp);
-
-    // Use GDI+ for per-pixel alpha rendering
-    {
-        Gdiplus::Graphics g(hdcMem);
-        g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
-
-        // Clear transparent
-        g.Clear(Gdiplus::Color(0, 0, 0, 0));
-
-        // Background rounded rect with alpha
-        BYTE bgAlpha = (BYTE)((DWORD)alpha * 230 / 255); // slightly less opaque bg
-        Gdiplus::SolidBrush bgBrush(Gdiplus::Color(bgAlpha, 0x1a, 0x1a, 0x2e));
-        Gdiplus::GraphicsPath path;
-        int r = 10;
-        int bx = 1, by = 1, bw = w - 2, bh = h - 2;
-        path.AddArc(bx, by, r*2, r*2, 180, 90);
-        path.AddArc(bx+bw-r*2, by, r*2, r*2, 270, 90);
-        path.AddArc(bx+bw-r*2, by+bh-r*2, r*2, r*2, 0, 90);
-        path.AddArc(bx, by+bh-r*2, r*2, r*2, 90, 90);
-        path.CloseFigure();
-        g.FillPath(&bgBrush, &path);
-
-        // Border
-        Gdiplus::Pen borderPen(Gdiplus::Color(alpha, 0xff, 0x46, 0x55), 1.5f);
-        g.DrawPath(&borderPen, &path);
-
-        // Red/white dot indicator (left side, vertically centered)
-        int dotX = 14, dotY = h / 2 - 4, dotR = 8;
-        Gdiplus::Color dotColor = g_speaking.load()
-            ? Gdiplus::Color(alpha, 0xff, 0xff, 0xff)
-            : Gdiplus::Color(alpha, 0xff, 0x46, 0x55);
-        Gdiplus::SolidBrush dotBrush(dotColor);
-        g.FillEllipse(&dotBrush, dotX, dotY, dotR, dotR);
-    }
-
-    // Premultiply alpha for UpdateLayeredWindow
-    DWORD* pixels = (DWORD*)pBits;
-    for (int i = 0; i < w * h; i++) {
-        BYTE a = (pixels[i] >> 24) & 0xff;
-        BYTE r2 = (BYTE)(((pixels[i] >> 16) & 0xff) * a / 255);
-        BYTE g2 = (BYTE)(((pixels[i] >>  8) & 0xff) * a / 255);
-        BYTE b2 = (BYTE)(((pixels[i]      ) & 0xff) * a / 255);
-        pixels[i] = ((DWORD)a << 24) | ((DWORD)r2 << 16) | ((DWORD)g2 << 8) | b2;
-    }
-
-    POINT ptSrc  = {0, 0};
-    SIZE  sz     = {w, h};
-    POINT ptDst  = {rc.left, rc.top};
-    BLENDFUNCTION bf = {AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
-
-    UpdateLayeredWindow(hwnd, hdcScreen, &ptDst, &sz, hdcMem, &ptSrc, 0, &bf, ULW_ALPHA);
-
-    SelectObject(hdcMem, hOld);
-    DeleteObject(hBmp);
-    DeleteDC(hdcMem);
-    ReleaseDC(nullptr, hdcScreen);
+    InvalidateRect(hwnd, nullptr, TRUE);
 }
 
 // ─── Show/Hide overlay ────────────────────────────────────────────────────────
@@ -780,8 +706,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         // Create child EDIT — ES_CENTER for horizontal centering
         g_edit = CreateWindowEx(
             0, L"EDIT", L"",
-            WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL | ES_CENTER,
-            28, 0, OVL_W - 42, OVL_H,
+            WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL | ES_CENTER | ES_MULTILINE,
+            28, 12, OVL_W - 42, OVL_H - 24,
             hwnd, (HMENU)EDIT_ID, g_hInst, nullptr);
 
         // Font: Segoe UI 15pt
@@ -811,11 +737,64 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         // Auto audio setup on first run (background thread)
         CheckAndRunAudioSetup();
 
+        // Use a color key for transparency so child controls (Edit box) are visible
+        SetLayeredWindowAttributes(hwnd, RGB(0, 255, 0), 255, LWA_COLORKEY);
+
         // Start TTS thread
         g_ttsEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
         InitializeCriticalSection(&g_cs);
         std::thread(TTSThread).detach();
         return 0;
+    }
+
+    case WM_ERASEBKGND:
+        return 1;
+
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        HDC hdc = BeginPaint(hwnd, &ps);
+        RECT rc; GetClientRect(hwnd, &rc);
+        int w = rc.right, h = rc.bottom;
+
+        // Fill background with green (our transparency color key)
+        HBRUSH hbrKey = CreateSolidBrush(RGB(0, 255, 0));
+        FillRect(hdc, &rc, hbrKey);
+        DeleteObject(hbrKey);
+
+        Gdiplus::Graphics g(hdc);
+        g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+
+        // Draw the dark background box
+        Gdiplus::SolidBrush bgBrush(Gdiplus::Color(235, 0x1a, 0x1a, 0x2e));
+        Gdiplus::GraphicsPath path;
+        int r = 10;
+        path.AddArc(1, 1, r*2, r*2, 180, 90);
+        path.AddArc(w-1-r*2, 1, r*2, r*2, 270, 90);
+        path.AddArc(w-1-r*2, h-1-r*2, r*2, r*2, 0, 90);
+        path.AddArc(1, h-1-r*2, r*2, r*2, 90, 90);
+        path.CloseFigure();
+        g.FillPath(&bgBrush, &path);
+
+        // Border
+        Gdiplus::Pen borderPen(Gdiplus::Color(0xff, 0xff, 0x46, 0x55), 1.5f);
+        g.DrawPath(&borderPen, &path);
+
+        // Indicator dot
+        Gdiplus::Color dotColor = g_speaking.load() ? Gdiplus::Color(255, 255, 255, 255) : Gdiplus::Color(255, 0xff, 0x46, 0x55);
+        Gdiplus::SolidBrush dotBrush(dotColor);
+        g.FillEllipse(&dotBrush, 14, h/2 - 4, 8, 8);
+
+        EndPaint(hwnd, &ps);
+        return 0;
+    }
+
+    case WM_CTLCOLOREDIT:
+    case WM_CTLCOLORSTATIC: {
+        HDC hdc = (HDC)wp;
+        SetTextColor(hdc, RGB(255, 255, 255));
+        SetBkColor(hdc, RGB(0x1a, 0x1a, 0x2e));
+        static HBRUSH hbrEdit = CreateSolidBrush(RGB(0x1a, 0x1a, 0x2e));
+        return (LRESULT)hbrEdit;
     }
 
     case WM_HOTKEY:
