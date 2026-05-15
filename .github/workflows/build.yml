@@ -54,7 +54,7 @@ jobs:
       - name: Install NSIS
         run: choco install nsis --yes --no-progress
 
-      # ── 7. Copy license for NSIS ────────────────────────────────────────────
+      # ── 7. Prepare installer assets ─────────────────────────────────────────
       - name: Prepare installer assets
         run: Copy-Item LICENSE LICENSE_INSTALLER.txt
 
@@ -63,7 +63,7 @@ jobs:
         run: |
           & "C:\Program Files (x86)\NSIS\makensis.exe" installer.nsi
 
-      # ── 9. Upload artifacts ─────────────────────────────────────────────────
+      # ── 9. Upload artifacts (always) ────────────────────────────────────────
       - name: Upload EXE artifact
         uses: actions/upload-artifact@v4
         with:
@@ -76,8 +76,35 @@ jobs:
           name: ContraryValorantTTS-Setup
           path: ContraryValorantTTS-Setup.exe
 
-      # ── 10. GitHub Release (tagged pushes only) ─────────────────────────────
-      - name: Create GitHub Release
+      # ── 10. Draft release on every master push ───────────────────────────────
+      # Deletes any previous draft named "latest-build" and creates a fresh one
+      - name: Delete previous draft release
+        if: github.ref == 'refs/heads/master'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $drafts = gh release list --json tagName,isDraft --jq '.[] | select(.isDraft) | .tagName' 2>$null
+          foreach ($tag in $drafts) {
+            if ($tag -eq "latest-build") {
+              gh release delete "latest-build" --yes 2>$null
+              git push origin --delete "latest-build" 2>$null
+            }
+          }
+
+      - name: Create draft release (master push)
+        if: github.ref == 'refs/heads/master'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "latest-build" `
+            --title "Latest Build (draft)" `
+            --notes "Auto-built from master. Not a stable release." `
+            --draft `
+            ContraryValorantTTS.exe `
+            ContraryValorantTTS-Setup.exe
+
+      # ── 11. Stable release on version tag (v*) ──────────────────────────────
+      - name: Create stable release (tag push)
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
@@ -85,3 +112,4 @@ jobs:
             ContraryValorantTTS.exe
             ContraryValorantTTS-Setup.exe
           generate_release_notes: true
+          draft: false

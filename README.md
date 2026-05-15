@@ -39,17 +39,33 @@ It works with any fullscreen app, not just Valorant.
 
 ## Download & Install
 
-### [⬇ Download Latest Installer](../../releases/latest)
+Two options — pick one:
 
-1. Download `ContraryValorantTTS-Setup.exe` from the link above
-2. Run the installer, click Next a few times
-3. Launch from the Start Menu or Desktop shortcut
-4. Press **F10** in Valorant to open the text box
-5. Type what you want said, press **Enter**
+| | File | Best for |
+|---|---|---|
+| **Installer** *(recommended)* | `ContraryValorantTTS-Setup.exe` | Most users — sets up mic routing automatically |
+| **Portable EXE** | `ContraryValorantTTS.exe` | Just want to run it, no install needed |
+
+### [⬇ Download Latest Release](../../releases/latest)
+
+> Releases page has both files. Download whichever you prefer.
+
+#### Using the Installer
+
+1. Download `ContraryValorantTTS-Setup.exe`
+2. Run it, click Next a few times
+3. Launch from Start Menu or Desktop shortcut
+4. The installer automatically sets up the **Contrary TTS** virtual mic
+5. Press **F10** in Valorant → type → **Enter**
+
+#### Using the Portable EXE
+
+1. Download `ContraryValorantTTS.exe`
+2. Double-click it — it starts silently in your system tray
+3. Press **F10** in Valorant → type → **Enter**
+4. For mic routing: run `setup_audio.ps1` manually (see [How the mic works](#how-the-mic-works))
 
 > **Note:** Valorant must be in **Borderless Window** mode for the overlay to appear on top of the game.
-
-> **Mic routing:** The installer automatically sets up a virtual mic called **Contrary TTS**. In Valorant (Settings → Audio → Input Device), select **Contrary TTS** — your teammates will hear the AI voice. See [How the mic works](#how-the-mic-works) below.
 
 ---
 
