@@ -54,8 +54,8 @@ if ($exe) {
 }
 
 # --- Step 3: Voice Packs ----------------------------------------------------
-Write-Step "Checking Speech Voice Packs..."
-$voices = @("Language.Speech.en-IN", "Language.Speech.hi-IN")
+Write-Step "Checking Speech & Hinglish Voice Packs..."
+$voices = @("Language.Speech.en-IN", "Language.Speech.hi-IN", "Language.TextToSpeech.en-IN")
 foreach ($v in $voices) {
     # Match specific capability name without wildcard confusion
     $cap = Get-WindowsCapability -Online | Where-Object { $_.Name -like "$v*" } | Select-Object -First 1
