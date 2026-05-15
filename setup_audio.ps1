@@ -20,9 +20,11 @@ using System.Runtime.InteropServices;
 [Guid("A95664D2-9614-4F35-A746-DE8DB63617E6")]
 [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
 interface IMMDeviceEnumerator {
-    int NotImpl1();
-    int GetDefaultAudioEndpoint(int dataFlow, int role, out IMMDevice ppDevice);
     int EnumAudioEndpoints(int dataFlow, int stateMask, out IMMDeviceCollection ppDevices);
+    int GetDefaultAudioEndpoint(int dataFlow, int role, out IMMDevice ppDevice);
+    int GetDevice(string pwstrId, out IMMDevice ppDevice);
+    int NotImpl1();
+    int NotImpl2();
 }
 
 [Guid("D666063F-1587-4E43-81F1-B948E807363F")]
