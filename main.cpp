@@ -171,8 +171,13 @@ static void ShowOverlay() {
     SetWindowText(g_edit, L"Type to speak...");
     g_placeholderActive = true;
 
-    // Focus edit without stealing foreground
+    // Attach to foreground thread so SetFocus works even when a game owns the foreground
+    HWND  hFg      = GetForegroundWindow();
+    DWORD fgTid    = GetWindowThreadProcessId(hFg, nullptr);
+    DWORD myTid    = GetCurrentThreadId();
+    bool  attached = (fgTid != myTid) && AttachThreadInput(myTid, fgTid, TRUE);
     SetFocus(g_edit);
+    if (attached) AttachThreadInput(myTid, fgTid, FALSE);
 
     g_visible  = true;
     g_fadeDir  = FADE_IN;
@@ -455,8 +460,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         // Subclass
         g_editOrigProc = (WNDPROC)SetWindowLongPtr(g_edit, GWLP_WNDPROC, (LONG_PTR)EditSubclassProc);
 
-        // Register F10 hotkey
-        RegisterHotKey(nullptr, HOTKEY_ID, 0, VK_F10);
+        // Register F10 hotkey — use hwnd so WM_HOTKEY routes to WndProc
+        RegisterHotKey(hwnd, HOTKEY_ID, 0, VK_F10);
 
         // Tray icon
         AddTrayIcon(hwnd);
@@ -545,7 +550,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
 
     case WM_DESTROY:
-        UnregisterHotKey(nullptr, HOTKEY_ID);
+        UnregisterHotKey(hwnd, HOTKEY_ID);
         PostQuitMessage(0);
         return 0;
     }
