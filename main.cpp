@@ -14,6 +14,7 @@
 #include <gdiplus.h>
 #include <comdef.h>
 #include <string>
+#include <vector>
 #include <thread>
 #include <atomic>
 #include <mutex>
@@ -25,19 +26,24 @@
 #pragma comment(lib, "ole32.lib")
 #pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "kernel32.lib")
+#pragma comment(lib, "advapi32.lib")
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 #define WM_TRAYICON      (WM_USER + 1)
-#define WM_SHOW_BALLOON  (WM_USER + 2)  // posted from TTS thread
+#define WM_SHOW_BALLOON  (WM_USER + 2)
 #define IDM_EXIT         1001
 #define IDM_TITLE        1002
 #define IDM_HOTKEY_INFO  1003
+#define IDM_SETTINGS     1004
 #define HOTKEY_ID        1
 #define FADE_TIMER_ID    2
 #define FADE_IN_STEP     12
 #define FADE_OUT_STEP    14
 #define TARGET_ALPHA     115
 #define EDIT_ID          100
+#define SETTINGS_LIST_ID 200
+#define SETTINGS_APPLY_ID 201
+#define SETTINGS_SETUP_ID 202
 
 static const COLORREF COL_BG      = RGB(0x1a, 0x1a, 0x2e);
 static const COLORREF COL_ACCENT  = RGB(0xff, 0x46, 0x55);
@@ -60,7 +66,9 @@ std::atomic<bool>    g_appRunning   {true};
 
 CRITICAL_SECTION     g_cs;
 std::wstring         g_pendingText;
-HANDLE               g_ttsEvent     = nullptr;
+HANDLE               g_ttsEvent       = nullptr;
+std::wstring         g_selectedVoice;   // saved voice name; empty = auto
+HWND                 g_settingsHwnd   = nullptr;
 
 // Fade state
 std::atomic<int>     g_alpha        {0};
@@ -69,6 +77,59 @@ std::atomic<FadeDir> g_fadeDir      {FADE_NONE};
 
 bool                 g_placeholderActive = false;
 ULONG_PTR            g_gdiplusToken = 0;
+
+// ─── Registry helpers ─────────────────────────────────────────────────────────
+static std::wstring RegLoadStr(const wchar_t* val) {
+    HKEY hk; std::wstring r;
+    if (RegOpenKeyEx(HKEY_CURRENT_USER, L"Software\\ContraryValorantTTS", 0, KEY_QUERY_VALUE, &hk) == ERROR_SUCCESS) {
+        WCHAR buf[256]={}; DWORD sz=sizeof(buf), t=REG_SZ;
+        if (RegQueryValueEx(hk, val, nullptr, &t, (BYTE*)buf, &sz) == ERROR_SUCCESS) r=buf;
+        RegCloseKey(hk);
+    }
+    return r;
+}
+static void RegSaveStr(const wchar_t* val, const std::wstring& s) {
+    HKEY hk;
+    if (RegCreateKeyEx(HKEY_CURRENT_USER, L"Software\\ContraryValorantTTS", 0, nullptr, 0, KEY_SET_VALUE, nullptr, &hk, nullptr) == ERROR_SUCCESS) {
+        RegSetValueEx(hk, val, 0, REG_SZ, (const BYTE*)s.c_str(), (DWORD)((s.size()+1)*sizeof(wchar_t)));
+        RegCloseKey(hk);
+    }
+}
+static DWORD RegLoadDW(const wchar_t* val) {
+    HKEY hk; DWORD r=0;
+    if (RegOpenKeyEx(HKEY_CURRENT_USER, L"Software\\ContraryValorantTTS", 0, KEY_QUERY_VALUE, &hk) == ERROR_SUCCESS) {
+        DWORD sz=sizeof(r), t=REG_DWORD;
+        RegQueryValueEx(hk, val, nullptr, &t, (BYTE*)&r, &sz);
+        RegCloseKey(hk);
+    }
+    return r;
+}
+static void RegSaveDW(const wchar_t* val, DWORD v) {
+    HKEY hk;
+    if (RegCreateKeyEx(HKEY_CURRENT_USER, L"Software\\ContraryValorantTTS", 0, nullptr, 0, KEY_SET_VALUE, nullptr, &hk, nullptr) == ERROR_SUCCESS) {
+        RegSetValueEx(hk, val, 0, REG_DWORD, (BYTE*)&v, sizeof(v));
+        RegCloseKey(hk);
+    }
+}
+
+// ─── Audio setup ──────────────────────────────────────────────────────────────
+static void RunAudioSetupPS() {
+    WCHAR ps[MAX_PATH]={};
+    GetModuleFileName(nullptr, ps, MAX_PATH);
+    WCHAR* sl=wcsrchr(ps, L'\\');
+    if (!sl) return;
+    wcscpy_s(sl+1, MAX_PATH-(int)(sl-ps)-1, L"setup_audio.ps1");
+    if (GetFileAttributes(ps)==INVALID_FILE_ATTRIBUTES) return;
+    std::wstring args = std::wstring(L"-ExecutionPolicy Bypass -NonInteractive -WindowStyle Hidden -File \"") + ps + L"\"";
+    ShellExecuteW(nullptr, L"open", L"powershell.exe", args.c_str(), nullptr, SW_HIDE);
+}
+static void CheckAndRunAudioSetup() {
+    std::thread([](){
+        if (RegLoadDW(L"AudioSetupDone")==1) return;
+        RunAudioSetupPS();
+        RegSaveDW(L"AudioSetupDone", 1);
+    }).detach();
+}
 
 // ─── GDI+ ARGB helper ────────────────────────────────────────────────────────
 static Gdiplus::ARGB MakeARGB(BYTE a, BYTE r, BYTE g, BYTE b) {
@@ -202,6 +263,26 @@ static ISpVoice* g_voice = nullptr;
 static void SelectVoice(bool hindiNeeded) {
     if (!g_voice) return;
 
+    // ── User-selected voice override ─────────────────────────────────────────
+    if (!g_selectedVoice.empty()) {
+        ISpObjectTokenCategory* pC2 = nullptr;
+        IEnumSpObjectTokens*    pE2 = nullptr;
+        SpGetCategoryFromId(SPCAT_VOICES, &pC2);
+        if (pC2) { pC2->EnumTokens(nullptr, nullptr, &pE2); pC2->Release(); }
+        if (pE2) {
+            ISpObjectToken* pT2 = nullptr;
+            while (pE2->Next(1, &pT2, nullptr) == S_OK) {
+                WCHAR* d2 = nullptr;
+                SpGetDescription(pT2, &d2);
+                bool match = d2 && (wcsstr(d2, g_selectedVoice.c_str()) || wcsstr(g_selectedVoice.c_str(), d2));
+                if (d2) CoTaskMemFree(d2);
+                if (match) { g_voice->SetVoice(pT2); pT2->Release(); pE2->Release(); return; }
+                pT2->Release();
+            }
+            pE2->Release();
+        }
+    }
+
     ISpObjectTokenCategory* pCat  = nullptr;
     IEnumSpObjectTokens*    pEnum = nullptr;
     SpGetCategoryFromId(SPCAT_VOICES, &pCat);
@@ -210,55 +291,37 @@ static void SelectVoice(bool hindiNeeded) {
     pCat->Release();
     if (!pEnum) return;
 
-    // Priority: Devanagari → Hindi voice | English → Heera (IN-EN) > Ravi > Zira > David > any
-    ISpObjectToken* pToken   = nullptr;
-    ISpObjectToken* heera    = nullptr;  // Indian English female (en-IN)
-    ISpObjectToken* ravi     = nullptr;  // Indian English male   (en-IN)
-    ISpObjectToken* zira     = nullptr;  // US English female
-    ISpObjectToken* david    = nullptr;  // US English male
-    ISpObjectToken* hindi    = nullptr;  // Devanagari (Hemant/Kalpana)
-    ISpObjectToken* fallback = nullptr;
+    // Priority: Devanagari → Hindi | English → Heera > Ravi > Zira > David > any
+    ISpObjectToken* pToken=nullptr, *heera=nullptr, *ravi=nullptr,
+                   *zira=nullptr,  *david=nullptr, *hindi=nullptr, *fallback=nullptr;
 
     while (pEnum->Next(1, &pToken, nullptr) == S_OK) {
         WCHAR* desc = nullptr;
         SpGetDescription(pToken, &desc);
         if (desc) {
-            std::wstring d(desc);
-            CoTaskMemFree(desc);
-            if (hindiNeeded) {
-                if ((d.find(L"Hemant") != std::wstring::npos ||
-                     d.find(L"Kalpana") != std::wstring::npos) && !hindi)
-                { hindi = pToken; pToken->AddRef(); }
-            }
-            // Indian English
-            if (d.find(L"Heera") != std::wstring::npos && !heera)
-                { heera = pToken; pToken->AddRef(); }
-            if (d.find(L"Ravi") != std::wstring::npos && !ravi)
-                { ravi  = pToken; pToken->AddRef(); }
-            // US English fallbacks
-            if (d.find(L"Zira")  != std::wstring::npos && !zira)
-                { zira  = pToken; pToken->AddRef(); }
-            if (d.find(L"David") != std::wstring::npos && !david)
-                { david = pToken; pToken->AddRef(); }
-            if (!fallback)
-                { fallback = pToken; pToken->AddRef(); }
+            std::wstring d(desc); CoTaskMemFree(desc);
+            if (hindiNeeded && (d.find(L"Hemant")!=std::wstring::npos||d.find(L"Kalpana")!=std::wstring::npos) && !hindi)
+                { hindi=pToken; pToken->AddRef(); }
+            if (d.find(L"Heera")!=std::wstring::npos && !heera) { heera=pToken; pToken->AddRef(); }
+            if (d.find(L"Ravi") !=std::wstring::npos && !ravi)  { ravi =pToken; pToken->AddRef(); }
+            if (d.find(L"Zira") !=std::wstring::npos && !zira)  { zira =pToken; pToken->AddRef(); }
+            if (d.find(L"David")!=std::wstring::npos && !david) { david=pToken; pToken->AddRef(); }
+            if (!fallback) { fallback=pToken; pToken->AddRef(); }
         }
         pToken->Release();
     }
     pEnum->Release();
 
     ISpObjectToken* chosen = nullptr;
-    if (hindiNeeded && hindi)  chosen = hindi;
-    else if (heera)            chosen = heera;   // Indian English preferred
-    else if (ravi)             chosen = ravi;
-    else if (zira)             chosen = zira;
-    else if (david)            chosen = david;
-    else                       chosen = fallback;
+    if (hindiNeeded && hindi) chosen=hindi;
+    else if (heera)  chosen=heera;
+    else if (ravi)   chosen=ravi;
+    else if (zira)   chosen=zira;
+    else if (david)  chosen=david;
+    else             chosen=fallback;
 
     if (chosen) g_voice->SetVoice(chosen);
-
-    // Release everything that isn't chosen
-    auto rel = [&](ISpObjectToken* t){ if (t && t != chosen) t->Release(); };
+    auto rel=[&](ISpObjectToken* t){ if(t&&t!=chosen) t->Release(); };
     rel(hindi); rel(heera); rel(ravi); rel(zira); rel(david); rel(fallback);
 }
 
@@ -428,6 +491,7 @@ static void ShowTrayMenu(HWND hwnd) {
     HMENU hMenu = CreatePopupMenu();
     AppendMenu(hMenu, MF_STRING | MF_GRAYED, IDM_TITLE,      L"Contrary Valorant TTS");
     AppendMenu(hMenu, MF_STRING,             IDM_HOTKEY_INFO, L"F10 \x2014 Toggle input");
+    AppendMenu(hMenu, MF_STRING,             IDM_SETTINGS,    L"Settings");
     AppendMenu(hMenu, MF_SEPARATOR,          0,               nullptr);
     AppendMenu(hMenu, MF_STRING,             IDM_EXIT,        L"Exit");
 
@@ -436,6 +500,149 @@ static void ShowTrayMenu(HWND hwnd) {
     SetForegroundWindow(hwnd);
     TrackPopupMenu(hMenu, TPM_RIGHTBUTTON, pt.x, pt.y, 0, hwnd, nullptr);
     DestroyMenu(hMenu);
+}
+
+// ─── Settings window ─────────────────────────────────────────────────────────
+static std::vector<std::wstring> g_voiceList; // populated when settings opens
+
+static std::wstring GetVoiceCategory(const std::wstring& name) {
+    if (name.find(L"Heera")!=std::wstring::npos || name.find(L"Ravi")!=std::wstring::npos)
+        return L"Indian English";
+    if (name.find(L"Hemant")!=std::wstring::npos || name.find(L"Kalpana")!=std::wstring::npos)
+        return L"Hindi";
+    if (name.find(L"Zira")!=std::wstring::npos || name.find(L"David")!=std::wstring::npos)
+        return L"US English";
+    if (name.find(L"Heather")!=std::wstring::npos || name.find(L"Mark")!=std::wstring::npos)
+        return L"US English";
+    return L"Other";
+}
+
+static LRESULT CALLBACK SettingsWndProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
+    switch (msg) {
+    case WM_CREATE: {
+        // List box of voices
+        CreateWindow(L"LISTBOX", nullptr,
+            WS_CHILD|WS_VISIBLE|WS_VSCROLL|LBS_NOTIFY|LBS_NOINTEGRALHEIGHT,
+            12, 50, 356, 200, hw, (HMENU)SETTINGS_LIST_ID, g_hInst, nullptr);
+        // Apply button
+        CreateWindow(L"BUTTON", L"Apply Voice",
+            WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON,
+            12, 262, 110, 28, hw, (HMENU)SETTINGS_APPLY_ID, g_hInst, nullptr);
+        // Re-run audio setup button
+        CreateWindow(L"BUTTON", L"Re-run Audio Setup",
+            WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON,
+            134, 262, 140, 28, hw, (HMENU)SETTINGS_SETUP_ID, g_hInst, nullptr);
+
+        // Font for all controls
+        LOGFONT lf={}; lf.lfHeight=-16; lf.lfQuality=CLEARTYPE_QUALITY;
+        wcscpy_s(lf.lfFaceName, L"Segoe UI");
+        HFONT hF = CreateFontIndirect(&lf);
+        EnumChildWindows(hw, [](HWND c, LPARAM f)->BOOL{
+            SendMessage(c, WM_SETFONT, f, TRUE); return TRUE;
+        }, (LPARAM)hF);
+
+        // Populate voices using STA COM (settings window is on main thread)
+        CoInitialize(nullptr);
+        g_voiceList.clear();
+        HWND hList = GetDlgItem(hw, SETTINGS_LIST_ID);
+        ISpObjectTokenCategory* pCat=nullptr;
+        IEnumSpObjectTokens* pEnum=nullptr;
+        SpGetCategoryFromId(SPCAT_VOICES, &pCat);
+        if (pCat) { pCat->EnumTokens(nullptr,nullptr,&pEnum); pCat->Release(); }
+        if (pEnum) {
+            ISpObjectToken* pTok=nullptr;
+            while (pEnum->Next(1,&pTok,nullptr)==S_OK) {
+                WCHAR* d=nullptr; SpGetDescription(pTok,&d);
+                if (d) {
+                    std::wstring desc(d); CoTaskMemFree(d);
+                    std::wstring cat = GetVoiceCategory(desc);
+                    std::wstring label = cat + L"  —  " + desc;
+                    SendMessage(hList, LB_ADDSTRING, 0, (LPARAM)label.c_str());
+                    g_voiceList.push_back(desc); // store raw desc for saving
+                    // Pre-select current voice
+                    if (!g_selectedVoice.empty() &&
+                        (g_selectedVoice==desc || desc.find(g_selectedVoice)!=std::wstring::npos))
+                        SendMessage(hList, LB_SETCURSEL, g_voiceList.size()-1, 0);
+                }
+                pTok->Release();
+            }
+            pEnum->Release();
+        }
+        CoUninitialize();
+        return 0;
+    }
+    case WM_COMMAND:
+        if (LOWORD(wp)==SETTINGS_APPLY_ID || (LOWORD(wp)==SETTINGS_LIST_ID && HIWORD(wp)==LBN_DBLCLK)) {
+            HWND hList = GetDlgItem(hw, SETTINGS_LIST_ID);
+            int sel = (int)SendMessage(hList, LB_GETCURSEL, 0, 0);
+            if (sel>=0 && sel<(int)g_voiceList.size()) {
+                g_selectedVoice = g_voiceList[sel];
+                RegSaveStr(L"SelectedVoice", g_selectedVoice);
+                // Force re-select on TTS thread next speak
+            }
+            DestroyWindow(hw);
+        }
+        if (LOWORD(wp)==SETTINGS_SETUP_ID) {
+            RunAudioSetupPS();
+            MessageBox(hw, L"Audio setup started. Check Windows Sound Settings in ~30 seconds.",
+                       L"Contrary TTS", MB_OK|MB_ICONINFORMATION);
+        }
+        return 0;
+    case WM_ERASEBKGND: {
+        HDC hdc=(HDC)wp; RECT r; GetClientRect(hw,&r);
+        HBRUSH b=CreateSolidBrush(RGB(0x1a,0x1a,0x2e));
+        FillRect(hdc,&r,b); DeleteObject(b);
+        return 1;
+    }
+    case WM_PAINT: {
+        PAINTSTRUCT ps; HDC hdc=BeginPaint(hw,&ps);
+        SetBkMode(hdc,TRANSPARENT);
+        SetTextColor(hdc,RGB(0xff,0xff,0xff));
+        HFONT hF=(HFONT)GetStockObject(DEFAULT_GUI_FONT);
+        SelectObject(hdc,hF);
+        TextOut(hdc,12,12,L"Voice Settings — Contrary TTS",30);
+        SetTextColor(hdc,RGB(0x99,0x99,0xbb));
+        TextOut(hdc,12,30,L"Select voice then click Apply (or double-click):",48);
+        EndPaint(hw,&ps);
+        return 0;
+    }
+    case WM_CTLCOLORLISTBOX:
+    case WM_CTLCOLORBTN:
+    case WM_CTLCOLORSTATIC: {
+        HDC hdc=(HDC)wp;
+        SetTextColor(hdc,RGB(0xff,0xff,0xff));
+        SetBkColor(hdc,RGB(0x12,0x12,0x20));
+        static HBRUSH hbr=CreateSolidBrush(RGB(0x12,0x12,0x20));
+        return (LRESULT)hbr;
+    }
+    case WM_DESTROY:
+        g_settingsHwnd=nullptr;
+        return 0;
+    }
+    return DefWindowProc(hw,msg,wp,lp);
+}
+
+static void ShowSettingsDialog() {
+    if (g_settingsHwnd && IsWindow(g_settingsHwnd)) {
+        SetForegroundWindow(g_settingsHwnd); return;
+    }
+    // Register settings class once
+    static bool reg=false;
+    if (!reg) {
+        WNDCLASSEX wc={};
+        wc.cbSize=sizeof(wc); wc.lpfnWndProc=SettingsWndProc;
+        wc.hInstance=g_hInst; wc.lpszClassName=L"CVTTSSettings";
+        wc.hbrBackground=(HBRUSH)GetStockObject(NULL_BRUSH);
+        wc.hCursor=LoadCursor(nullptr,IDC_ARROW);
+        RegisterClassEx(&wc); reg=true;
+    }
+    int sw=GetSystemMetrics(SM_CXSCREEN), sh=GetSystemMetrics(SM_CYSCREEN);
+    g_settingsHwnd = CreateWindowEx(
+        WS_EX_TOPMOST|WS_EX_TOOLWINDOW,
+        L"CVTTSSettings", L"Contrary TTS — Settings",
+        WS_POPUP|WS_CAPTION|WS_SYSMENU|WS_VISIBLE,
+        (sw-380)/2, (sh-310)/2, 380, 310,
+        g_hwnd, nullptr, g_hInst, nullptr);
 }
 
 // ─── Edit subclass: capture Enter/Esc, clear placeholder ─────────────────────
@@ -510,6 +717,12 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         // Tray icon
         AddTrayIcon(hwnd);
 
+        // Load saved voice name
+        g_selectedVoice = RegLoadStr(L"SelectedVoice");
+
+        // Auto audio setup on first run (background thread)
+        CheckAndRunAudioSetup();
+
         // Start TTS thread
         g_ttsEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
         InitializeCriticalSection(&g_cs);
@@ -532,6 +745,9 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         // Tray menu
         switch (LOWORD(wp)) {
+        case IDM_SETTINGS:
+            ShowSettingsDialog();
+            return 0;
         case IDM_EXIT:
             g_appRunning = false;
             SetEvent(g_ttsEvent);
