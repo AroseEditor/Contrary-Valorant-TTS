@@ -26,11 +26,11 @@ function Write-Warn([string]$m) { Write-Host " [!!] $m"  -ForegroundColor Yellow
 # --- Step 1: Detect App -----------------------------------------------------
 Write-Step "Locating Contrary TTS executable..."
 $possiblePaths = @(
-    (Get-Process "ContraryTTS" -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Path),
-    (Join-Path $PSScriptRoot "ContraryTTS.exe"),
-    (Join-Path $PSScriptRoot "Release\ContraryTTS.exe"),
-    (Join-Path $PSScriptRoot "x64\Release\ContraryTTS.exe"),
-    (Join-Path $env:LOCALAPPDATA "ContraryValorantTTS\ContraryTTS.exe")
+    (Get-Process "ContraryValorantTTS" -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Path),
+    (Join-Path $PSScriptRoot "ContraryValorantTTS.exe"),
+    (Join-Path $PSScriptRoot "Release\ContraryValorantTTS.exe"),
+    (Join-Path $PSScriptRoot "x64\Release\ContraryValorantTTS.exe"),
+    (Join-Path $env:LOCALAPPDATA "ContraryValorantTTS\ContraryValorantTTS.exe")
 )
 
 $exe = $null
