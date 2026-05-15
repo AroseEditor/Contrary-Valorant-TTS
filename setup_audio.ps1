@@ -1,15 +1,15 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Contrary Valorant TTS — Audio Setup
-    Installs VB-Cable, renames devices to "Contrary TTS", sets as default playback.
+    Contrary Valorant TTS - Audio Setup
+    Installs VB-Cable, renames to "Contrary TTS", sets as default playback.
 #>
 
 $ErrorActionPreference = "Continue"
 $VBInput  = "Contrary TTS"
 $VBOutput = "Contrary TTS Output"
 
-# ─── Minimal IPolicyConfig — only SetDefaultEndpoint ─────────────────────────
+# --- Minimal IPolicyConfig (SetDefaultEndpoint only) -------------------------
 $PolicyCS = @"
 using System;
 using System.Runtime.InteropServices;
@@ -39,22 +39,22 @@ public static class DefaultDevice {
 "@
 Add-Type -TypeDefinition $PolicyCS -Language CSharp 2>$null
 
-# ─── Helpers ──────────────────────────────────────────────────────────────────
+# --- Helpers -----------------------------------------------------------------
 function Write-Step([string]$m) { Write-Host "`n[>>] $m" -ForegroundColor Cyan }
 function Write-OK([string]$m)   { Write-Host " [OK] $m" -ForegroundColor Green }
 function Write-Warn([string]$m) { Write-Host " [!!] $m" -ForegroundColor Yellow }
 function Write-Fail([string]$m) { Write-Host " [XX] $m" -ForegroundColor Red }
 
-# Registry paths for MMDevices
 $RenderReg  = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Render"
 $CaptureReg = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Capture"
 $NameProp   = "{a45c254e-df1c-4efd-8020-67d146a850e0},14"
 
-function Get-DeviceByName([string]$path, [string]$substr) {
+function Get-AudioDeviceKey([string]$path, [string]$substr) {
     if (-not (Test-Path $path)) { return $null }
     foreach ($key in Get-ChildItem $path -ErrorAction SilentlyContinue) {
-        $props = Get-ItemProperty "$($key.PSPath)\Properties" -ErrorAction SilentlyContinue
-        if ($props -and $props.$NameProp -and $props.$NameProp -like "*$substr*") {
+        $propsPath = "$($key.PSPath)\Properties"
+        $props = Get-ItemProperty $propsPath -ErrorAction SilentlyContinue
+        if ($props -and $props.$NameProp -and ($props.$NameProp -like "*$substr*")) {
             return $key
         }
     }
@@ -62,7 +62,7 @@ function Get-DeviceByName([string]$path, [string]$substr) {
 }
 
 function Rename-AudioDevice([string]$path, [string]$substr, [string]$newName) {
-    $key = Get-DeviceByName $path $substr
+    $key = Get-AudioDeviceKey $path $substr
     if (-not $key) { return $false }
     try {
         Set-ItemProperty -Path "$($key.PSPath)\Properties" -Name $NameProp -Value $newName -ErrorAction Stop
@@ -71,24 +71,25 @@ function Rename-AudioDevice([string]$path, [string]$substr, [string]$newName) {
 }
 
 function Get-DeviceId([string]$path, [string]$substr) {
-    $key = Get-DeviceByName $path $substr
+    $key = Get-AudioDeviceKey $path $substr
     if (-not $key) { return $null }
-    return (Get-ItemProperty $key.PSPath -ErrorAction SilentlyContinue).DeviceId
+    $val = Get-ItemProperty $key.PSPath -ErrorAction SilentlyContinue
+    if ($val -and $val.DeviceId) { return $val.DeviceId }
+    return $null
 }
 
-# ─── Step 1: Check / install VB-Cable ────────────────────────────────────────
+# --- Step 1: Check / install VB-Cable ----------------------------------------
 Write-Step "Checking for VB-Cable driver..."
 
-$cableKey = Get-DeviceByName $RenderReg "CABLE"
-if (-not $cableKey) { $cableKey = Get-DeviceByName $RenderReg "Contrary TTS" }
+$cableKey = Get-AudioDeviceKey $RenderReg "CABLE"
+if (-not $cableKey) { $cableKey = Get-AudioDeviceKey $RenderReg "Contrary TTS" }
 
 if ($cableKey) {
-    Write-OK "VB-Cable already installed — skipping download."
+    Write-OK "VB-Cable already installed - skipping download."
 } else {
     Write-Step "Downloading VB-Cable..."
     $tmpDir  = Join-Path $env:TEMP "VBCableSetup"
     $zipPath = Join-Path $tmpDir "VBCABLE_Driver_Pack43.zip"
-    $exePath = Join-Path $tmpDir "VBCABLE_Setup_x64.exe"
     New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
     try {
         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
@@ -100,31 +101,34 @@ if ($cableKey) {
         Write-Warn "Install VB-Cable manually from https://vb-audio.com/Cable/"
         exit 1
     }
+
     Write-Step "Extracting..."
     Expand-Archive -Path $zipPath -DestinationPath $tmpDir -Force
     Write-OK "Extracted."
 
-    $found = Get-ChildItem $tmpDir -Recurse -Filter "VBCABLE_Setup_x64.exe" | Select-Object -First 1
-    if (-not $found) { Write-Fail "Setup exe not found."; exit 1 }
+    $exeFile = Get-ChildItem $tmpDir -Recurse -Filter "VBCABLE_Setup_x64.exe" | Select-Object -First 1
+    if (-not $exeFile) { Write-Fail "Setup exe not found in archive."; exit 1 }
 
-    Write-Step "Installing VB-Cable (UAC prompt expected)..."
-    $proc = Start-Process $found.FullName -ArgumentList "/S" -Verb RunAs -PassThru -Wait
-    if ($proc.ExitCode -ne 0) { Write-Warn "Exit code $($proc.ExitCode) — may still be OK." }
+    Write-Step "Installing VB-Cable driver (UAC prompt expected)..."
+    $proc = Start-Process $exeFile.FullName -ArgumentList "/S" -Verb RunAs -PassThru -Wait
+    if ($proc.ExitCode -ne 0) {
+        Write-Warn "Exit code $($proc.ExitCode) - may still be OK."
+    }
     Write-OK "Driver install complete."
 
     Write-Step "Waiting for device to appear..."
-    for ($i=0; $i -lt 10; $i++) {
+    for ($i = 0; $i -lt 10; $i++) {
         Start-Sleep 2
-        $cableKey = Get-DeviceByName $RenderReg "CABLE"
+        $cableKey = Get-AudioDeviceKey $RenderReg "CABLE"
         if ($cableKey) { Write-OK "Device detected."; break }
     }
     if (-not $cableKey) { Write-Warn "Device not visible yet. Try rebooting." }
 }
 
-# ─── Step 2: Rename via registry ─────────────────────────────────────────────
+# --- Step 2: Rename via registry ---------------------------------------------
 Write-Step "Renaming devices..."
 
-$ok = Rename-AudioDevice $RenderReg  "CABLE Input"  $VBInput
+$ok = Rename-AudioDevice $RenderReg "CABLE Input" $VBInput
 if (-not $ok) { $ok = Rename-AudioDevice $RenderReg "CABLE" $VBInput }
 if ($ok)  { Write-OK "Playback renamed to '$VBInput'." }
 else      { Write-Warn "Could not rename playback device (may need admin or reboot)." }
@@ -134,7 +138,7 @@ if (-not $ok2) { $ok2 = Rename-AudioDevice $CaptureReg "CABLE" $VBOutput }
 if ($ok2) { Write-OK "Recording renamed to '$VBOutput'." }
 else      { Write-Warn "Could not rename recording device." }
 
-# ─── Step 3: Set as default playback ─────────────────────────────────────────
+# --- Step 3: Set as default playback -----------------------------------------
 Write-Step "Setting '$VBInput' as default playback..."
 
 $devId = Get-DeviceId $RenderReg $VBInput
@@ -143,12 +147,12 @@ if (-not $devId) { $devId = Get-DeviceId $RenderReg "CABLE" }
 if ($devId) {
     $ok3 = [DefaultDevice]::SetDefault($devId)
     if ($ok3) { Write-OK "Default playback set." }
-    else      { Write-Warn "SetDefaultEndpoint failed — set manually in Sound Settings." }
+    else      { Write-Warn "SetDefaultEndpoint failed - set manually in Sound Settings." }
 } else {
-    Write-Warn "Could not find device ID — set default manually in Sound Settings."
+    Write-Warn "Could not find device ID - set default manually in Sound Settings."
 }
 
-# ─── Step 4: Install Indian English + Hindi voices ───────────────────────────
+# --- Step 4: Install Indian English + Hindi voices ---------------------------
 Write-Step "Installing speech voice packs..."
 $packs = @(
     @{ Name="Language.Speech~~~en-IN~0.0.1.0"; Label="Indian English (Heera/Ravi)" },
@@ -158,23 +162,23 @@ foreach ($pack in $packs) {
     try {
         $cap = Get-WindowsCapability -Online -Name $pack.Name -ErrorAction SilentlyContinue
         if ($cap -and $cap.State -eq "Installed") {
-            Write-OK "$($pack.Label) — already installed."
+            Write-OK "$($pack.Label) - already installed."
         } else {
             Add-WindowsCapability -Online -Name $pack.Name -ErrorAction Stop | Out-Null
-            Write-OK "$($pack.Label) — installed."
+            Write-OK "$($pack.Label) - installed."
         }
     } catch {
-        Write-Warn "$($pack.Label) — install via Settings > Time & Language > Language."
+        Write-Warn "$($pack.Label) - install via Settings, Time and Language, Language."
     }
 }
 
-# ─── Done ─────────────────────────────────────────────────────────────────────
+# --- Done --------------------------------------------------------------------
 Write-Host ""
-Write-Host "════════════════════════════════════════" -ForegroundColor Magenta
+Write-Host "========================================" -ForegroundColor Magenta
 Write-Host "  Contrary TTS Audio Setup Complete"     -ForegroundColor Magenta
-Write-Host "════════════════════════════════════════" -ForegroundColor Magenta
+Write-Host "========================================" -ForegroundColor Magenta
 Write-Host "  Playback : Contrary TTS"               -ForegroundColor White
 Write-Host "  Mic      : Contrary TTS Output"        -ForegroundColor White
-Write-Host "  In Valorant: Settings > Audio > Input Device > Contrary TTS" -ForegroundColor Gray
-Write-Host "════════════════════════════════════════" -ForegroundColor Magenta
+Write-Host "  In Valorant: Settings, Audio, Input Device, Contrary TTS" -ForegroundColor Gray
+Write-Host "========================================" -ForegroundColor Magenta
 exit 0
