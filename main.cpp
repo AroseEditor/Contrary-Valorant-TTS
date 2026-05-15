@@ -334,7 +334,7 @@ static void TTSThread() {
         DrawLayered(g_hwnd, (BYTE)g_alpha.load()); // redraw dot white
 
         voice->Speak(text.c_str(), SPF_ASYNC | SPF_PURGEBEFORESPEAK, nullptr);
-        voice->WaitUntilDone(SPFEI_ALL_EVENTS);
+        voice->WaitUntilDone(INFINITE);
 
         g_speaking = false;
         DrawLayered(g_hwnd, (BYTE)g_alpha.load()); // redraw dot red
@@ -396,7 +396,7 @@ static void TriggerSpeak(HWND hwnd) {
     int len = GetWindowTextLength(g_edit);
     if (len <= 0) { HideOverlay(); return; }
     std::wstring text(len + 1, L'\0');
-    GetWindowText(g_edit, text.data(), len + 1);
+    GetWindowText(g_edit, &text[0], len + 1);
     text.resize(len);
 
     if (text.empty()) { HideOverlay(); return; }
