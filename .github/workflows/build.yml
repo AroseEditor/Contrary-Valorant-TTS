@@ -85,16 +85,12 @@ jobs:
       # ── 10. Draft release on every master push ───────────────────────────────
       - name: Delete previous draft release
         if: github.ref == 'refs/heads/master'
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          $drafts = gh release list --json tagName,isDraft --jq '.[] | select(.isDraft) | .tagName' 2>$null
-          foreach ($tag in $drafts) {
-            if ($tag -eq "latest-build") {
-              gh release delete "latest-build" --yes 2>$null
-              git push origin --delete "latest-build" 2>$null
-            }
-          }
+          gh release delete "latest-build" --yes
+          git push origin --delete "latest-build"
 
       - name: Create draft release with changelog
         if: github.ref == 'refs/heads/master'
