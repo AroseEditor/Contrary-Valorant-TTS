@@ -56,6 +56,9 @@ Var DesktopShortcut
 ; ─── Install Section ──────────────────────────────────────────────────────────
 Section "Install" SecMain
 
+    ; Kill any running instance so we can overwrite the exe
+    ExecWait 'taskkill /F /IM "ContraryValorantTTS.exe" /T' $0
+
     SetOutPath "$INSTDIR"
 
     ; Copy files
