@@ -79,11 +79,21 @@ function Test-VBCableInstalled() {
     return $false
 }
 
-# Direct Win32 registry (no PSPath issues, handles comma in property name)
+# MMDevices Properties are stored as binary PROPVARIANT (not REG_SZ strings)
+# VT_LPWSTR (0x1F): bytes 0-1 = vartype, bytes 2-7 = padding, bytes 8+ = UTF-16LE string
+
 function Get-DeviceFriendlyName([string]$subKeyPath) {
     try {
         $k = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey($subKeyPath, $false)
-        if ($k) { $v = $k.GetValue($NameProp); $k.Close(); return $v }
+        if (-not $k) { return $null }
+        $raw = $k.GetValue($NameProp)
+        $k.Close()
+        if (-not $raw) { return $null }
+        # Check VARTYPE in first 2 bytes
+        $vt = [BitConverter]::ToUInt16([byte[]]$raw, 0)
+        if ($vt -eq 31 -and $raw.Length -gt 8) {  # 31 = VT_LPWSTR
+            return [System.Text.Encoding]::Unicode.GetString($raw, 8, $raw.Length - 8).TrimEnd([char]0)
+        }
     } catch {}
     return $null
 }
@@ -91,11 +101,14 @@ function Get-DeviceFriendlyName([string]$subKeyPath) {
 function Set-DeviceFriendlyName([string]$subKeyPath, [string]$newName) {
     try {
         $k = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey($subKeyPath, $true)
-        if ($k) {
-            $k.SetValue($NameProp, $newName, [Microsoft.Win32.RegistryValueKind]::String)
-            $k.Close()
-            return $true
-        }
+        if (-not $k) { return $false }
+        # Build PROPVARIANT binary: 2-byte VT_LPWSTR + 6-byte padding + UTF-16LE string + null
+        $strBytes  = [System.Text.Encoding]::Unicode.GetBytes($newName + [char]0)
+        $header    = [byte[]]@(0x1F, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00)
+        $propvariant = [byte[]]($header + $strBytes)
+        $k.SetValue($NameProp, $propvariant, [Microsoft.Win32.RegistryValueKind]::Binary)
+        $k.Close()
+        return $true
     } catch { Write-Warn "  SetValue: $_" }
     return $false
 }
