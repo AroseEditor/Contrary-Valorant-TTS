@@ -202,20 +202,22 @@ static ISpVoice* g_voice = nullptr;
 static void SelectVoice(bool hindiNeeded) {
     if (!g_voice) return;
 
-    ISpObjectTokenCategory* pCat = nullptr;
+    ISpObjectTokenCategory* pCat  = nullptr;
     IEnumSpObjectTokens*    pEnum = nullptr;
     SpGetCategoryFromId(SPCAT_VOICES, &pCat);
     if (!pCat) return;
-
     pCat->EnumTokens(nullptr, nullptr, &pEnum);
     pCat->Release();
     if (!pEnum) return;
 
-    ISpObjectToken* pToken = nullptr;
+    // Priority: Devanagari → Hindi voice | English → Heera (IN-EN) > Ravi > Zira > David > any
+    ISpObjectToken* pToken   = nullptr;
+    ISpObjectToken* heera    = nullptr;  // Indian English female (en-IN)
+    ISpObjectToken* ravi     = nullptr;  // Indian English male   (en-IN)
+    ISpObjectToken* zira     = nullptr;  // US English female
+    ISpObjectToken* david    = nullptr;  // US English male
+    ISpObjectToken* hindi    = nullptr;  // Devanagari (Hemant/Kalpana)
     ISpObjectToken* fallback = nullptr;
-    ISpObjectToken* david = nullptr;
-    ISpObjectToken* zira = nullptr;
-    ISpObjectToken* hindi = nullptr;
 
     while (pEnum->Next(1, &pToken, nullptr) == S_OK) {
         WCHAR* desc = nullptr;
@@ -224,26 +226,40 @@ static void SelectVoice(bool hindiNeeded) {
             std::wstring d(desc);
             CoTaskMemFree(desc);
             if (hindiNeeded) {
-                if (d.find(L"Hemant") != std::wstring::npos || d.find(L"Kalpana") != std::wstring::npos) {
-                    hindi = pToken; break;
-                }
+                if ((d.find(L"Hemant") != std::wstring::npos ||
+                     d.find(L"Kalpana") != std::wstring::npos) && !hindi)
+                { hindi = pToken; pToken->AddRef(); }
             }
-            if (d.find(L"Zira") != std::wstring::npos && !zira)   { zira  = pToken; pToken->AddRef(); }
-            if (d.find(L"David") != std::wstring::npos && !david)  { david = pToken; pToken->AddRef(); }
-            if (!fallback) { fallback = pToken; pToken->AddRef(); }
+            // Indian English
+            if (d.find(L"Heera") != std::wstring::npos && !heera)
+                { heera = pToken; pToken->AddRef(); }
+            if (d.find(L"Ravi") != std::wstring::npos && !ravi)
+                { ravi  = pToken; pToken->AddRef(); }
+            // US English fallbacks
+            if (d.find(L"Zira")  != std::wstring::npos && !zira)
+                { zira  = pToken; pToken->AddRef(); }
+            if (d.find(L"David") != std::wstring::npos && !david)
+                { david = pToken; pToken->AddRef(); }
+            if (!fallback)
+                { fallback = pToken; pToken->AddRef(); }
         }
         pToken->Release();
     }
     pEnum->Release();
 
-    ISpObjectToken* chosen = hindi ? hindi : (zira ? zira : (david ? david : fallback));
-    if (chosen) {
-        g_voice->SetVoice(chosen);
-    }
+    ISpObjectToken* chosen = nullptr;
+    if (hindiNeeded && hindi)  chosen = hindi;
+    else if (heera)            chosen = heera;   // Indian English preferred
+    else if (ravi)             chosen = ravi;
+    else if (zira)             chosen = zira;
+    else if (david)            chosen = david;
+    else                       chosen = fallback;
 
-    if (zira && zira != chosen) zira->Release();
-    if (david && david != chosen) david->Release();
-    if (fallback && fallback != chosen) fallback->Release();
+    if (chosen) g_voice->SetVoice(chosen);
+
+    // Release everything that isn't chosen
+    auto rel = [&](ISpObjectToken* t){ if (t && t != chosen) t->Release(); };
+    rel(hindi); rel(heera); rel(ravi); rel(zira); rel(david); rel(fallback);
 }
 
 // ─── Audio output device routing ─────────────────────────────────────────────
@@ -357,15 +373,43 @@ static void TTSThread() {
 
 // ─── Tray icon ────────────────────────────────────────────────────────────────
 static HICON LoadAppIcon(int size) {
-    // Load from embedded resource (app.rc / icon.ico)
+    // 1. Embedded resource
     HICON hIcon = (HICON)LoadImage(
-        GetModuleHandle(nullptr),
-        MAKEINTRESOURCE(IDI_ICON1),
-        IMAGE_ICON, size, size,
-        LR_DEFAULTCOLOR);
-    if (!hIcon) // fallback: try loading from file beside exe
-        hIcon = (HICON)LoadImage(nullptr, L"icon.ico", IMAGE_ICON,
-                                  size, size, LR_LOADFROMFILE | LR_DEFAULTCOLOR);
+        GetModuleHandle(nullptr), MAKEINTRESOURCE(IDI_ICON1),
+        IMAGE_ICON, size, size, LR_DEFAULTCOLOR);
+    if (hIcon) return hIcon;
+
+    // 2. icon.ico beside the exe (absolute path)
+    WCHAR path[MAX_PATH] = {};
+    GetModuleFileName(nullptr, path, MAX_PATH);
+    WCHAR* slash = wcsrchr(path, L'\\');
+    if (slash) wcscpy_s(slash + 1, MAX_PATH - (int)(slash - path) - 1, L"icon.ico");
+    hIcon = (HICON)LoadImage(nullptr, path, IMAGE_ICON,
+                             size, size, LR_LOADFROMFILE | LR_DEFAULTCOLOR);
+    if (hIcon) return hIcon;
+
+    // 3. GDI fallback — red circle, never blank
+    HDC     hdcScr = GetDC(nullptr);
+    HDC     hdcMem = CreateCompatibleDC(hdcScr);
+    HBITMAP hBmp   = CreateCompatibleBitmap(hdcScr, size, size);
+    HBITMAP hMask  = CreateBitmap(size, size, 1, 1, nullptr);
+    HBITMAP hOld   = (HBITMAP)SelectObject(hdcMem, hBmp);
+    HBRUSH  hBg    = CreateSolidBrush(RGB(0x0f, 0x0e, 0x17));
+    HBRUSH  hRed   = CreateSolidBrush(RGB(0xff, 0x46, 0x55));
+    RECT    rc     = {0, 0, size, size};
+    FillRect(hdcMem, &rc, hBg);
+    SelectObject(hdcMem, hRed);
+    SelectObject(hdcMem, GetStockObject(NULL_PEN));
+    Ellipse(hdcMem, 1, 1, size - 1, size - 1);
+    SelectObject(hdcMem, hOld);
+    DeleteObject(hBg);
+    DeleteObject(hRed);
+    DeleteDC(hdcMem);
+    ReleaseDC(nullptr, hdcScr);
+    ICONINFO ii = {TRUE, 0, 0, hMask, hBmp};
+    hIcon = CreateIconIndirect(&ii);
+    DeleteObject(hBmp);
+    DeleteObject(hMask);
     return hIcon;
 }
 
@@ -438,11 +482,11 @@ static LRESULT CALLBACK EditSubclassProc(HWND hw, UINT msg, WPARAM wp, LPARAM lp
 static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
     case WM_CREATE: {
-        // Create child EDIT control
+        // Create child EDIT — ES_CENTER for horizontal centering
         g_edit = CreateWindowEx(
             0, L"EDIT", L"",
-            WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL,
-            28, 14, OVL_W - 42, OVL_H - 28,
+            WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL | ES_CENTER,
+            28, 0, OVL_W - 42, OVL_H,
             hwnd, (HMENU)EDIT_ID, g_hInst, nullptr);
 
         // Font: Segoe UI 15pt
@@ -527,9 +571,12 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
     case WM_CTLCOLOREDIT: {
         HDC hdcEdit = (HDC)wp;
-        SetTextColor(hdcEdit, COL_WHITE);
-        SetBkMode(hdcEdit, TRANSPARENT);
-        return (LRESULT)GetStockObject(NULL_BRUSH);
+        SetTextColor(hdcEdit, RGB(0xff, 0xff, 0xff));  // white text
+        SetBkColor(hdcEdit,   RGB(0x1a, 0x1a, 0x2e));  // match overlay bg
+        SetBkMode(hdcEdit, OPAQUE);
+        // Return a solid brush matching the bg so the edit is fully visible
+        static HBRUSH hEditBg = CreateSolidBrush(RGB(0x1a, 0x1a, 0x2e));
+        return (LRESULT)hEditBg;
     }
 
     case WM_ACTIVATE:
