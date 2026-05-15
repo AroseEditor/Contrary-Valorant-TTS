@@ -64,6 +64,8 @@ function Write-Fail([string]$m) { Write-Host " [XX] $m"  -ForegroundColor Red }
 
 $RenderReg  = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Render"
 $CaptureReg = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Capture"
+$RenderBase  = "SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Render"
+$CaptureBase = "SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Capture"
 $NameProp   = "{a45c254e-df1c-4efd-8020-67d146a850e0},14"
 
 # Fast detection via PnP (no registry enumeration hang)
@@ -77,48 +79,56 @@ function Test-VBCableInstalled() {
     return $false
 }
 
-# Use GetValue/SetValue to handle property names with commas correctly
-function Get-MMDeviceName([string]$propsPath) {
+# Direct Win32 registry (no PSPath issues, handles comma in property name)
+function Get-DeviceFriendlyName([string]$subKeyPath) {
     try {
-        $item = Get-Item -LiteralPath $propsPath -ErrorAction SilentlyContinue
-        if ($item) { return $item.GetValue($NameProp) }
+        $k = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey($subKeyPath, $false)
+        if ($k) { $v = $k.GetValue($NameProp); $k.Close(); return $v }
     } catch {}
     return $null
 }
 
-function Set-MMDeviceName([string]$propsPath, [string]$newName) {
+function Set-DeviceFriendlyName([string]$subKeyPath, [string]$newName) {
     try {
-        $item = Get-Item -LiteralPath $propsPath -ErrorAction Stop
-        $item.SetValue($NameProp, $newName, [Microsoft.Win32.RegistryValueKind]::String)
-        return $true
-    } catch { return $false }
-}
-
-# Registry rename (requires admin)
-function Rename-MMDevice([string]$regBase, [string]$match, [string]$newName) {
-    if (-not (Test-Path $regBase)) { return $false }
-    foreach ($key in (Get-ChildItem $regBase -ErrorAction SilentlyContinue)) {
-        $pp = "$($key.PSPath)\Properties"
-        if (-not (Test-Path $pp)) { continue }
-        $val = Get-MMDeviceName $pp
-        if ($val -and $val -like "*$match*") {
-            return Set-MMDeviceName $pp $newName
+        $k = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey($subKeyPath, $true)
+        if ($k) {
+            $k.SetValue($NameProp, $newName, [Microsoft.Win32.RegistryValueKind]::String)
+            $k.Close()
+            return $true
         }
-    }
+    } catch { Write-Warn "  SetValue: $_" }
     return $false
 }
 
-# Get endpoint ID for IPolicyConfig — constructed from registry key GUID
-function Get-RenderEndpointId([string]$match) {
-    foreach ($key in (Get-ChildItem $RenderReg -ErrorAction SilentlyContinue)) {
-        $pp = "$($key.PSPath)\Properties"
-        if (-not (Test-Path $pp)) { continue }
-        $val = Get-MMDeviceName $pp
-        if ($val -and $val -like "*$match*") {
-            # Endpoint ID format: {0.0.0.00000000}.{GUID}
-            return "{0.0.0.00000000}.$($key.PSChildName)"
+function Rename-MMDevice([string]$baseKey, [string]$match, [string]$newName) {
+    try {
+        $root = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey($baseKey, $false)
+        if (-not $root) { return $false }
+        foreach ($guid in $root.GetSubKeyNames()) {
+            $val = Get-DeviceFriendlyName "$baseKey\$guid\Properties"
+            if ($val -and $val -like "*$match*") {
+                $root.Close()
+                return Set-DeviceFriendlyName "$baseKey\$guid\Properties" $newName
+            }
         }
-    }
+        $root.Close()
+    } catch { Write-Warn "  Rename: $_" }
+    return $false
+}
+
+function Get-RenderEndpointId([string]$match) {
+    try {
+        $root = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey($RenderBase, $false)
+        if (-not $root) { return $null }
+        foreach ($guid in $root.GetSubKeyNames()) {
+            $val = Get-DeviceFriendlyName "$RenderBase\$guid\Properties"
+            if ($val -and $val -like "*$match*") {
+                $root.Close()
+                return "{0.0.0.00000000}.$guid"
+            }
+        }
+        $root.Close()
+    } catch {}
     return $null
 }
 
@@ -166,15 +176,15 @@ if (Test-VBCableInstalled) {
 # --- Step 2: Rename via registry ---------------------------------------------
 Write-Step "Renaming devices in registry..."
 
-$r1 = Rename-MMDevice $RenderReg  "CABLE Input"  $VBInput
-if (-not $r1) { $r1 = Rename-MMDevice $RenderReg  "CABLE"        $VBInput  }
-if (-not $r1) { $r1 = Rename-MMDevice $RenderReg  "Contrary TTS" $VBInput  } # already renamed
+$r1 = Rename-MMDevice $RenderBase  "CABLE Input"  $VBInput
+if (-not $r1) { $r1 = Rename-MMDevice $RenderBase  "CABLE"        $VBInput }
+if (-not $r1) { $r1 = Rename-MMDevice $RenderBase  "Contrary TTS" $VBInput }
 if ($r1)  { Write-OK "Playback renamed to '$VBInput'." }
 else      { Write-Warn "Could not rename playback device." }
 
-$r2 = Rename-MMDevice $CaptureReg "CABLE Output"       $VBOutput
-if (-not $r2) { $r2 = Rename-MMDevice $CaptureReg "CABLE"               $VBOutput }
-if (-not $r2) { $r2 = Rename-MMDevice $CaptureReg "Contrary TTS Output" $VBOutput } # already renamed
+$r2 = Rename-MMDevice $CaptureBase "CABLE Output"       $VBOutput
+if (-not $r2) { $r2 = Rename-MMDevice $CaptureBase "CABLE"               $VBOutput }
+if (-not $r2) { $r2 = Rename-MMDevice $CaptureBase "Contrary TTS Output" $VBOutput }
 if ($r2) { Write-OK "Recording renamed to '$VBOutput'." }
 else     { Write-Warn "Could not rename recording device." }
 
@@ -188,7 +198,7 @@ if ($policyOk) {
         if ([DefaultDevice]::SetDefault($epId)) { Write-OK "Default playback set." }
         else { Write-Warn "SetDefaultEndpoint failed - set manually in Sound Settings." }
     } else {
-        Write-Warn "Endpoint not found in registry - set default manually."
+        Write-Warn "Endpoint not found - set default manually in Sound Settings."
     }
 } else {
     Write-Warn "Policy COM unavailable - set default manually in Sound Settings."
