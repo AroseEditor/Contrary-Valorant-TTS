@@ -28,6 +28,10 @@
 #pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "kernel32.lib")
 #pragma comment(lib, "advapi32.lib")
+#pragma comment(lib, "propsys.lib")
+
+#include <mmdeviceapi.h>
+#include <functiondiscoverykeys_devpkey.h>
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 #define WM_TRAYICON      (WM_USER + 1)
@@ -111,6 +115,51 @@ static void RegSaveDW(const wchar_t* val, DWORD v) {
         RegSetValueEx(hk, val, 0, REG_DWORD, (BYTE*)&v, sizeof(v));
         RegCloseKey(hk);
     }
+}
+}
+
+// ─── Native Audio Setup (Bypasses Registry Locks) ─────────────────────────────
+static bool RenameDeviceNative(EDataFlow flow, const wchar_t* match, const wchar_t* newName) {
+    IMMDeviceEnumerator* pEnum = nullptr;
+    CoInitialize(nullptr);
+    HRESULT hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, __uuidof(IMMDeviceEnumerator), (void**)&pEnum);
+    if (FAILED(hr) || !pEnum) return false;
+
+    IMMDeviceCollection* pCol = nullptr;
+    pEnum->EnumAudioEndpoints(flow, DEVICE_STATE_ACTIVE, &pCol);
+    bool found = false;
+    if (pCol) {
+        UINT count = 0; pCol->GetCount(&count);
+        for (UINT i = 0; i < count; i++) {
+            IMMDevice* pDev = nullptr;
+            pCol->Item(i, &pDev);
+            if (pDev) {
+                IPropertyStore* pPS = nullptr;
+                if (SUCCEEDED(pDev->OpenPropertyStore(STGM_READWRITE, &pPS))) {
+                    PROPVARIANT var; PropVariantInit(&var);
+                    pPS->GetValue(PKEY_Device_FriendlyName, &var);
+                    if (var.vt == VT_LPWSTR && wcsstr(var.pwszVal, match)) {
+                        PROPVARIANT varNew; varNew.vt = VT_LPWSTR; varNew.pwszVal = (LPWSTR)newName;
+                        pPS->SetValue(PKEY_Device_FriendlyName, varNew);
+                        pPS->Commit();
+                        found = true;
+                    }
+                    PropVariantClear(&var);
+                    pPS->Release();
+                }
+                pDev->Release();
+                if (found) break;
+            }
+        }
+        pCol->Release();
+    }
+    pEnum->Release();
+    return found;
+}
+
+static void RunNativeSetup() {
+    RenameDeviceNative(eRender,  L"CABLE Input",  L"Contrary TTS");
+    RenameDeviceNative(eCapture, L"CABLE Output", L"Contrary TTS Output");
 }
 
 // ─── Audio setup ──────────────────────────────────────────────────────────────
@@ -864,8 +913,14 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 }
 
 // ─── WinMain ─────────────────────────────────────────────────────────────────
-int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int) {
+int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR lpCmdLine, int) {
     g_hInst = hInst;
+
+    // Handle --setup-audio flag for native rename (bypasses registry locks)
+    if (strstr(lpCmdLine, "--setup-audio")) {
+        RunNativeSetup();
+        return 0;
+    }
 
     // Single-instance check
     HANDLE hMutex = CreateMutex(nullptr, TRUE, L"ContraryValorantTTS_Mutex");
