@@ -82,24 +82,26 @@ interface IPolicyConfig {
     int SetEndpointVisibility(string pszDeviceName, bool bVisible);
 }
 
-[ComImport, Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")]
-class MMDeviceEnumeratorClass {}
-
-[ComImport, Guid("870af99c-171d-4f9e-af0d-e63df40c2bc9")]
-class CPolicyConfigClient {}
-
 public static class AudioSetup {
     static readonly Guid CLSID_MMDeviceEnumerator = new Guid("BCDE0395-E52F-467C-8E3D-C4579291692E");
+    static readonly Guid CLSID_PolicyConfig       = new Guid("870af99c-171d-4f9e-af0d-e63df40c2bc9");
+
     // PKEY_Device_FriendlyName
     static readonly PropertyKey PKEY_FriendlyName = new PropertyKey {
         fmtid = new Guid("a45c254e-df1c-4efd-8020-67d146a850e0"),
         pid   = 14
     };
 
+    static IMMDeviceEnumerator NewEnumerator() =>
+        (IMMDeviceEnumerator)Activator.CreateInstance(Type.GetTypeFromCLSID(CLSID_MMDeviceEnumerator));
+
+    static IPolicyConfig NewPolicyConfig() =>
+        (IPolicyConfig)Activator.CreateInstance(Type.GetTypeFromCLSID(CLSID_PolicyConfig));
+
     public static string[] GetDeviceIds(int dataFlow) {
-        var enumerator = (IMMDeviceEnumerator)new MMDeviceEnumeratorClass();
+        var enumerator = NewEnumerator();
         IMMDeviceCollection col;
-        enumerator.EnumAudioEndpoints(dataFlow, 1 /*DEVICE_STATE_ACTIVE*/, out col);
+        enumerator.EnumAudioEndpoints(dataFlow, 1, out col);
         uint count; col.GetCount(out count);
         var ids = new string[count];
         for (uint i = 0; i < count; i++) {
@@ -111,13 +113,10 @@ public static class AudioSetup {
     }
 
     public static string GetFriendlyName(string deviceId) {
-        var enumerator = (IMMDeviceEnumerator)new MMDeviceEnumeratorClass();
-        // Use GetDefaultAudioEndpoint as workaround to get by ID via property store
-        // We enumerate and match
         foreach (int flow in new[]{0,1}) {
-            var enumerator2 = (IMMDeviceEnumerator)new MMDeviceEnumeratorClass();
+            var en = NewEnumerator();
             IMMDeviceCollection col;
-            enumerator2.EnumAudioEndpoints(flow, 1, out col);
+            en.EnumAudioEndpoints(flow, 1, out col);
             uint count; col.GetCount(out count);
             for (uint i = 0; i < count; i++) {
                 IMMDevice dev; col.Item(i, out dev);
@@ -135,7 +134,7 @@ public static class AudioSetup {
 
     // Returns device ID of first endpoint whose friendly name contains 'substring'
     public static string FindDeviceByName(string substring, int dataFlow) {
-        var enumerator = (IMMDeviceEnumerator)new MMDeviceEnumeratorClass();
+        var enumerator = NewEnumerator();
         IMMDeviceCollection col;
         enumerator.EnumAudioEndpoints(dataFlow, 1, out col);
         uint count; col.GetCount(out count);
@@ -155,8 +154,7 @@ public static class AudioSetup {
 
     public static bool SetDefaultDevice(string deviceId) {
         try {
-            var policy = (IPolicyConfig)new CPolicyConfigClient();
-            // Set as default for all roles: eConsole=0, eMultimedia=1, eCommunications=2
+            var policy = NewPolicyConfig();
             policy.SetDefaultEndpoint(deviceId, 0);
             policy.SetDefaultEndpoint(deviceId, 1);
             policy.SetDefaultEndpoint(deviceId, 2);
@@ -164,25 +162,22 @@ public static class AudioSetup {
         } catch { return false; }
     }
 
-    // Rename via registry — PKEY_Device_FriendlyName write requires STGM_WRITE on property store
-    // This works without admin on user-level audio endpoints
     public static bool RenameDevice(string deviceId, string newName) {
         try {
-            var enumerator = (IMMDeviceEnumerator)new MMDeviceEnumeratorClass();
             foreach (int flow in new[]{0,1}) {
-                var en2 = (IMMDeviceEnumerator)new MMDeviceEnumeratorClass();
+                var en = NewEnumerator();
                 IMMDeviceCollection col;
-                en2.EnumAudioEndpoints(flow, 1, out col);
+                en.EnumAudioEndpoints(flow, 1, out col);
                 uint count; col.GetCount(out count);
                 for (uint i = 0; i < count; i++) {
                     IMMDevice dev; col.Item(i, out dev);
                     string id; dev.GetId(out id);
                     if (id != deviceId) continue;
                     IPropertyStore store;
-                    dev.OpenPropertyStore(2 /*STGM_WRITE*/, out store);
+                    dev.OpenPropertyStore(2, out store);
                     var key = PKEY_FriendlyName;
                     IntPtr strPtr = Marshal.StringToCoTaskMemUni(newName);
-                    var pv = new PropVariant { vt = 31 /*VT_LPWSTR*/, ptr = strPtr };
+                    var pv = new PropVariant { vt = 31, ptr = strPtr };
                     store.SetValue(ref key, ref pv);
                     store.Commit();
                     Marshal.FreeCoTaskMem(strPtr);
